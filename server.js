@@ -1,15 +1,10 @@
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "20kb" }));
-
-const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
 
 // Test endpoint
 app.get("/", (req, res) => {
@@ -18,7 +13,7 @@ app.get("/", (req, res) => {
     });
 });
 
-// AI Tutor endpoint
+// Demo AI Tutor
 app.post("/api/ask", async (req, res) => {
 
     const question = req.body?.question?.trim();
@@ -29,45 +24,52 @@ app.post("/api/ask", async (req, res) => {
         });
     }
 
-    if (question.length > 4000) {
-        return res.status(400).json({
-            error: "Question is too long"
-        });
+    let answer;
+
+    const lowerQuestion = question.toLowerCase();
+
+    if (
+        lowerQuestion.includes("human heart") ||
+        lowerQuestion.includes("heart")
+    ) {
+
+        answer =
+            "The human heart is a muscular organ that pumps blood throughout the body. " +
+            "It has four chambers: two atria and two ventricles. " +
+            "The right side of the heart sends deoxygenated blood to the lungs, " +
+            "while the left side sends oxygen-rich blood to the rest of the body.";
+
+    } else if (
+        lowerQuestion.includes("photosynthesis")
+    ) {
+
+        answer =
+            "Photosynthesis is the process by which green plants make their food " +
+            "using sunlight, carbon dioxide, and water. " +
+            "It mainly takes place in the leaves and produces glucose and oxygen.";
+
+    } else if (
+        lowerQuestion.includes("gravity")
+    ) {
+
+        answer =
+            "Gravity is the force that attracts objects toward each other. " +
+            "On Earth, gravity pulls objects toward the Earth's center and gives " +
+            "objects their weight.";
+
+    } else {
+
+        answer =
+            "This is Demo Mode. Your question was: \"" +
+            question +
+            "\"\n\n" +
+            "The AI Tutor backend is working correctly. " +
+            "Real AI answers will be enabled when OpenAI API credits are available.";
     }
 
-    try {
-
-        const response = await client.responses.create({
-            model: "gpt-5.6-luna",
-
-            input: [
-                {
-                    role: "developer",
-                    content:
-                        "You are Study Buddy AI, a friendly and helpful study tutor. " +
-                        "Explain answers clearly and simply. " +
-                        "Use examples when useful. " +
-                        "For school questions, provide step-by-step explanations."
-                },
-                {
-                    role: "user",
-                    content: question
-                }
-            ]
-        });
-
-        res.json({
-            answer: response.output_text
-        });
-
-    } catch (error) {
-
-        console.error(error);
-
-        res.status(500).json({
-            error: "Unable to generate AI response"
-        });
-    }
+    res.json({
+        answer: answer
+    });
 });
 
 const PORT = process.env.PORT || 3000;
