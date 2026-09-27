@@ -30,7 +30,9 @@ app.get("/", (req, res) => {
 
 });
 
-//
+// -----------------------------------------
+// Gemini AI Function
+// -----------------------------------------
 
 async function generateGeminiAnswer(prompt) {
 
@@ -39,6 +41,10 @@ async function generateGeminiAnswer(prompt) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 
         try {
+
+            console.log(
+                `Gemini request attempt ${attempt}`
+            );
 
             const response =
                 await ai.models.generateContent({
@@ -49,7 +55,18 @@ async function generateGeminiAnswer(prompt) {
 
                 });
 
-            return response.text?.trim();
+            const answer =
+                response.text?.trim();
+
+            if (!answer) {
+
+                throw new Error(
+                    "Gemini returned an empty response."
+                );
+
+            }
+
+            return answer;
 
         } catch (error) {
 
@@ -67,18 +84,28 @@ async function generateGeminiAnswer(prompt) {
                 message.includes("high demand") ||
                 error?.status === 503;
 
-            if (!isTemporaryError ||
-                    attempt === maxAttempts) {
+            if (
+                !isTemporaryError ||
+                attempt === maxAttempts
+            ) {
 
                 throw error;
+
             }
 
-            // Wait before trying again
             const waitTime =
                 attempt * 2000;
 
-            await new Promise(resolve =>
-                setTimeout(resolve, waitTime)
+            console.log(
+                `Waiting ${waitTime}ms before retry...`
+            );
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        waitTime
+                    )
             );
         }
     }
@@ -86,7 +113,9 @@ async function generateGeminiAnswer(prompt) {
     throw new Error(
         "Gemini service is temporarily unavailable."
     );
-} -----------------------------------------
+}
+
+// -----------------------------------------
 // AI Tutor
 // -----------------------------------------
 
@@ -98,7 +127,8 @@ app.post("/api/ask", async (req, res) => {
             req.body?.question?.trim();
 
         const subject =
-            req.body?.subject?.trim() || "General";
+            req.body?.subject?.trim() ||
+            "General";
 
         // -----------------------------------------
         // Validate question
@@ -113,13 +143,13 @@ app.post("/api/ask", async (req, res) => {
         }
 
         // -----------------------------------------
-        // Check Gemini API key
+        // Check API key
         // -----------------------------------------
 
         if (!process.env.GEMINI_API_KEY) {
 
             console.error(
-                "GEMINI_API_KEY is not configured."
+                "GEMINI_API_KEY is missing."
             );
 
             return res.status(500).json({
@@ -130,7 +160,7 @@ app.post("/api/ask", async (req, res) => {
         }
 
         // -----------------------------------------
-        // Study Buddy AI Tutor prompt
+        // Study Buddy AI Prompt
         // -----------------------------------------
 
         const prompt = `
@@ -144,51 +174,36 @@ The student asked:
 
 ${question}
 
-Please answer the student's question using these rules:
+Please answer the student's question.
+
+Important instructions:
 
 1. Explain the concept in simple student-friendly language.
 2. Give a step-by-step explanation when useful.
 3. Give examples when helpful.
 4. For Mathematics and Physics, show formulas and calculations clearly.
 5. For Biology and Chemistry, explain scientific concepts accurately.
-6. For English, explain grammar, vocabulary and writing clearly.
-7. If the question asks for practice questions, provide practice questions.
-8. If the question asks for an example, provide a simple example.
-9. Use headings and bullet points when useful.
+6. For English, explain grammar, vocabulary, comprehension and writing clearly.
+7. If the student asks for practice questions, provide useful practice questions.
+8. If the student asks for an example, provide a simple example.
+9. Use short headings when useful.
 10. Keep the answer clear and reasonably concise.
-11. Do not mention Demo Mode.
-12. Do not mention the API or backend.
-13. Answer the student's actual question directly.
-14. Maintain a friendly and encouraging teaching style.
+11. Do not use Markdown symbols such as ###, **, *, or ---.
+12. Put every bullet point on a separate line.
+13. Put every heading on a separate line.
+14. Use normal bullet points beginning with "•".
+15. Do not mention Demo Mode.
+16. Do not mention the API, server or backend.
+17. Answer the student's actual question directly.
+18. Maintain a friendly and encouraging teaching style.
 `;
 
         // -----------------------------------------
-        // Call Gemini
+        // Generate answer
         // -----------------------------------------
 
-        const response =
-            await ai.models.generateContent({
-
-                model: "gemini-3.8-flash",
-
-                contents: prompt
-
-            });
-
-        // -----------------------------------------
-        // Get Gemini answer
-        // -----------------------------------------
-
-        const answer = await generateGeminiAnswer(prompt);
-
-        if (!answer) {
-
-            return res.status(500).json({
-                error:
-                    "Gemini returned an empty response."
-            });
-
-        }
+        const answer =
+            await generateGeminiAnswer(prompt);
 
         // -----------------------------------------
         // Send answer to Android
@@ -201,18 +216,32 @@ Please answer the student's question using these rules:
     } catch (error) {
 
         console.error(
-            "Gemini error:",
+            "AI Tutor error:",
             error
         );
 
+        const message =
+            error?.message ||
+            "Something went wrong while generating the AI response.";
+
+        // Temporary Gemini availability problem
+        if (
+            message.includes("503") ||
+            message.includes("UNAVAILABLE") ||
+            message.includes("high demand")
+        ) {
+
+            return res.status(503).json({
+                error:
+                    "AI service is temporarily busy. Please try again in a few seconds."
+            });
+
+        }
+
         return res.status(500).json({
-            error:
-                error?.message ||
-                "Something went wrong while generating the AI response."
+            error: message
         });
-
     }
-
 });
 
 // -----------------------------------------
