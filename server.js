@@ -113,7 +113,7 @@ Please answer the student's question using these rules:
         const response =
             await ai.models.generateContent({
 
-                model: "gemini-2.5-flash",
+                model: "model: "gemini-3.8-flash",
 
                 contents: prompt
 
