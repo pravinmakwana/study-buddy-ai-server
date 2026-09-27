@@ -7,22 +7,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "20kb" }));
 
-// -----------------------------------------
-// Gemini Configuration
-// -----------------------------------------
-
 const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
 
-// -----------------------------------------
-// Test endpoint
-// -----------------------------------------
+
+/* =========================================================
+   HOME / SERVER STATUS
+   ========================================================= */
 
 app.get("/", (req, res) => {
 
     res.json({
         message: "Study Buddy AI Backend is running!",
+
         ai: process.env.GEMINI_API_KEY
             ? "Gemini configured"
             : "Gemini API key missing"
@@ -30,121 +28,100 @@ app.get("/", (req, res) => {
 
 });
 
-// -----------------------------------------
-// Gemini AI Function
-// -----------------------------------------
+
+/* =========================================================
+   GEMINI AI FUNCTION
+   ========================================================= */
 
 async function generateGeminiAnswer(prompt) {
 
-    const maxAttempts = 3;
+    try {
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log("Sending request to Gemini...");
 
-        try {
+        const response =
+            await ai.models.generateContent({
 
-            console.log(
-                `Gemini request attempt ${attempt}`
+                model: "gemini-3.8-flash",
+
+                contents: prompt
+
+            });
+
+
+        const answer =
+            response.text?.trim();
+
+
+        if (!answer) {
+
+            throw new Error(
+                "Gemini returned an empty response."
             );
 
-            const response =
-                await ai.models.generateContent({
-
-                    model: "gemini-3.8-flash",
-
-                    contents: prompt
-
-                });
-
-            const answer =
-                response.text?.trim();
-
-            if (!answer) {
-
-                throw new Error(
-                    "Gemini returned an empty response."
-                );
-
-            }
-
-            return answer;
-
-        } catch (error) {
-
-            console.error(
-                `Gemini attempt ${attempt} failed:`,
-                error?.message || error
-            );
-
-            const message =
-                error?.message || "";
-
-            const isTemporaryError =
-                message.includes("503") ||
-                message.includes("UNAVAILABLE") ||
-                message.includes("high demand") ||
-                error?.status === 503;
-
-            if (
-                !isTemporaryError ||
-                attempt === maxAttempts
-            ) {
-
-                throw error;
-
-            }
-
-            const waitTime =
-                attempt * 2000;
-
-            console.log(
-                `Waiting ${waitTime}ms before retry...`
-            );
-
-            await new Promise(
-                resolve =>
-                    setTimeout(
-                        resolve,
-                        waitTime
-                    )
-            );
         }
+
+
+        return answer;
+
+    } catch (error) {
+
+        console.error(
+            "Gemini error:",
+            error?.message || error
+        );
+
+        throw error;
+
     }
 
-    throw new Error(
-        "Gemini service is temporarily unavailable."
-    );
 }
 
-// -----------------------------------------
-// AI Tutor
-// -----------------------------------------
+
+/* =========================================================
+   AI TUTOR API
+   ========================================================= */
 
 app.post("/api/ask", async (req, res) => {
 
     try {
 
+        /* -------------------------------------------------
+           GET QUESTION
+           ------------------------------------------------- */
+
         const question =
             req.body?.question?.trim();
+
+
+        /* -------------------------------------------------
+           GET SUBJECT
+           ------------------------------------------------- */
 
         const subject =
             req.body?.subject?.trim() ||
             "General";
 
-        // -----------------------------------------
-        // Validate question
-        // -----------------------------------------
+
+        /* -------------------------------------------------
+           VALIDATE QUESTION
+           ------------------------------------------------- */
 
         if (!question) {
 
             return res.status(400).json({
-                error: "Question is required"
+
+                error:
+                    "Question is required."
+
             });
 
         }
 
-        // -----------------------------------------
-        // Check API key
-        // -----------------------------------------
+
+        /* -------------------------------------------------
+           CHECK API KEY
+           ------------------------------------------------- */
 
         if (!process.env.GEMINI_API_KEY) {
 
@@ -153,28 +130,36 @@ app.post("/api/ask", async (req, res) => {
             );
 
             return res.status(500).json({
+
                 error:
                     "Gemini API key is not configured on the server."
+
             });
 
         }
 
-        // -----------------------------------------
-        // Study Buddy AI Prompt
-        // -----------------------------------------
+
+        /* =================================================
+           AI PROMPT
+           ================================================= */
 
         const prompt = `
+
 You are Study Buddy AI, an educational AI tutor.
 
 IMPORTANT:
 The student's selected subject is: ${subject}
 
 The student's question is:
+
 ${question}
 
-You MUST answer according to the selected subject.
 
-SUBJECT RULES:
+=================================================
+SUBJECT RULES
+=================================================
+
+You MUST answer according to the selected subject.
 
 - If the selected subject is Mathematics, answer as a Mathematics tutor.
 - If the selected subject is Physics, answer as a Physics tutor.
@@ -183,22 +168,39 @@ SUBJECT RULES:
 - If the selected subject is English, answer as an English tutor.
 - If the selected subject is General, answer generally.
 
-IMPORTANT SUBJECT BEHAVIOR:
+
+=================================================
+IMPORTANT SUBJECT BEHAVIOR
+=================================================
 
 1. Never change the selected subject.
+
 2. Never say that the student is in another subject.
+
 3. Never mention Biology when Mathematics is selected unless the student specifically asks about Biology.
+
 4. Never add unrelated subject examples.
+
 5. Answer the exact question asked by the student.
+
 6. For simple questions, keep the answer reasonably short.
+
 7. Explain difficult concepts step by step.
+
 8. For Mathematics, show formulas and calculations clearly.
+
 9. For Mathematics, use simple numerical examples when useful.
+
 10. For Biology and Chemistry, explain scientific concepts accurately.
+
 11. For Physics, explain formulas and physical concepts clearly.
+
 12. For English, explain grammar, vocabulary and writing clearly.
 
-FORMATTING RULES:
+
+=================================================
+FORMATTING RULES
+=================================================
 
 - Use simple headings when useful.
 - Put every heading on its own line.
@@ -211,7 +213,12 @@ FORMATTING RULES:
 - Do not repeat the question unnecessarily.
 - Do not mention the API, backend, server or Demo Mode.
 
-For example, if the student asks:
+
+=================================================
+EXAMPLE
+=================================================
+
+If the student asks:
 
 "Square Root"
 
@@ -229,23 +236,33 @@ Examples:
 
 Do not discuss Biology unless the student specifically asks about Biology.
 
+
+=================================================
+FINAL INSTRUCTION
+=================================================
+
 Now answer the student's question.
 `;
 
-        // -----------------------------------------
-        // Generate answer
-        // -----------------------------------------
+
+        /* -------------------------------------------------
+           CALL GEMINI
+           ------------------------------------------------- */
 
         const answer =
             await generateGeminiAnswer(prompt);
 
-        // -----------------------------------------
-        // Send answer to Android
-        // -----------------------------------------
+
+        /* -------------------------------------------------
+           SUCCESS RESPONSE
+           ------------------------------------------------- */
 
         return res.json({
+
             answer: answer
+
         });
+
 
     } catch (error) {
 
@@ -254,42 +271,82 @@ Now answer the student's question.
             error
         );
 
+
         const message =
             error?.message ||
-            "Something went wrong while generating the AI response.";
+            "";
 
-        // Temporary Gemini availability problem
+
+        /* =================================================
+           429 - QUOTA EXCEEDED
+           ================================================= */
+
         if (
-            message.includes("503") ||
-            message.includes("UNAVAILABLE") ||
-            message.includes("high demand")
+            message.includes("429") ||
+            message.includes("RESOURCE_EXHAUSTED") ||
+            message.toLowerCase().includes("quota")
         ) {
 
-            return res.status(503).json({
+            return res.status(429).json({
+
                 error:
-                    "AI service is temporarily busy. Please try again in a few seconds."
+                    "AI usage limit reached. Please try again later."
+
             });
 
         }
 
+
+        /* =================================================
+           503 - GEMINI TEMPORARILY BUSY
+           ================================================= */
+
+        if (
+            message.includes("503") ||
+            message.includes("UNAVAILABLE") ||
+            message.toLowerCase().includes("high demand")
+        ) {
+
+            return res.status(503).json({
+
+                error:
+                    "AI service is temporarily busy. Please try again in a few seconds."
+
+            });
+
+        }
+
+
+        /* =================================================
+           OTHER ERROR
+           ================================================= */
+
         return res.status(500).json({
-            error: message
+
+            error:
+                "Something went wrong while generating the AI response."
+
         });
+
     }
+
 });
 
-// -----------------------------------------
-// Start Server
-// -----------------------------------------
+
+/* =========================================================
+   START SERVER
+   ========================================================= */
 
 const PORT =
     process.env.PORT || 3000;
+
 
 app.listen(PORT, () => {
 
     console.log(
         `Study Buddy AI server running on port ${PORT}`
     );
+
 
     if (process.env.GEMINI_API_KEY) {
 
