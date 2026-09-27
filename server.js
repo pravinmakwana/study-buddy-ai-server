@@ -30,7 +30,63 @@ app.get("/", (req, res) => {
 
 });
 
-// -----------------------------------------
+//
+
+async function generateGeminiAnswer(prompt) {
+
+    const maxAttempts = 3;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+
+        try {
+
+            const response =
+                await ai.models.generateContent({
+
+                    model: "gemini-3.8-flash",
+
+                    contents: prompt
+
+                });
+
+            return response.text?.trim();
+
+        } catch (error) {
+
+            console.error(
+                `Gemini attempt ${attempt} failed:`,
+                error?.message || error
+            );
+
+            const message =
+                error?.message || "";
+
+            const isTemporaryError =
+                message.includes("503") ||
+                message.includes("UNAVAILABLE") ||
+                message.includes("high demand") ||
+                error?.status === 503;
+
+            if (!isTemporaryError ||
+                    attempt === maxAttempts) {
+
+                throw error;
+            }
+
+            // Wait before trying again
+            const waitTime =
+                attempt * 2000;
+
+            await new Promise(resolve =>
+                setTimeout(resolve, waitTime)
+            );
+        }
+    }
+
+    throw new Error(
+        "Gemini service is temporarily unavailable."
+    );
+} -----------------------------------------
 // AI Tutor
 // -----------------------------------------
 
