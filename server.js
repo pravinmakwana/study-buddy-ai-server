@@ -179,8 +179,7 @@ Please answer the student's question using these rules:
         // Get Gemini answer
         // -----------------------------------------
 
-        const answer =
-            response.text?.trim();
+        const answer = await generateGeminiAnswer(prompt);
 
         if (!answer) {
 
