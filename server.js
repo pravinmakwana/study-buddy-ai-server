@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 
@@ -8,11 +8,11 @@ app.use(cors());
 app.use(express.json({ limit: "20kb" }));
 
 // -----------------------------------------
-// OpenAI Configuration
+// Gemini Configuration
 // -----------------------------------------
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY
 });
 
 // -----------------------------------------
@@ -20,12 +20,14 @@ const openai = new OpenAI({
 // -----------------------------------------
 
 app.get("/", (req, res) => {
+
     res.json({
         message: "Study Buddy AI Backend is running!",
-        ai: process.env.OPENAI_API_KEY
-            ? "OpenAI configured"
-            : "OpenAI API key missing"
+        ai: process.env.GEMINI_API_KEY
+            ? "Gemini configured"
+            : "Gemini API key missing"
     });
+
 });
 
 // -----------------------------------------
@@ -42,86 +44,99 @@ app.post("/api/ask", async (req, res) => {
         const subject =
             req.body?.subject?.trim() || "General";
 
+        // -----------------------------------------
         // Validate question
+        // -----------------------------------------
+
         if (!question) {
 
             return res.status(400).json({
                 error: "Question is required"
             });
+
         }
 
-        // Check API key
-        if (!process.env.OPENAI_API_KEY) {
+        // -----------------------------------------
+        // Check Gemini API key
+        // -----------------------------------------
+
+        if (!process.env.GEMINI_API_KEY) {
 
             console.error(
-                "OPENAI_API_KEY is not configured."
+                "GEMINI_API_KEY is not configured."
             );
 
             return res.status(500).json({
-                error: "OpenAI API key is not configured on the server."
+                error:
+                    "Gemini API key is not configured on the server."
             });
+
         }
 
         // -----------------------------------------
-        // AI Tutor Instructions
+        // Study Buddy AI Tutor prompt
         // -----------------------------------------
 
-        const instructions = `
+        const prompt = `
 You are Study Buddy AI, a friendly educational AI tutor.
 
-Your job is to help students understand academic topics clearly.
+The student selected this subject:
 
-Subject: ${subject}
+${subject}
 
-Rules:
+The student asked:
 
-1. Explain concepts in simple and student-friendly language.
-2. Give step-by-step explanations when appropriate.
-3. Use examples when they help understanding.
-4. For Mathematics and Physics, show important formulas and calculations clearly.
+${question}
+
+Please answer the student's question using these rules:
+
+1. Explain the concept in simple student-friendly language.
+2. Give a step-by-step explanation when useful.
+3. Give examples when helpful.
+4. For Mathematics and Physics, show formulas and calculations clearly.
 5. For Biology and Chemistry, explain scientific concepts accurately.
-6. For English, explain grammar, vocabulary, comprehension, and writing clearly.
-7. If the question is ambiguous, ask for clarification.
-8. Do not unnecessarily make answers very long.
+6. For English, explain grammar, vocabulary and writing clearly.
+7. If the question asks for practice questions, provide practice questions.
+8. If the question asks for an example, provide a simple example.
 9. Use headings and bullet points when useful.
-10. Do not say that you are in Demo Mode.
-11. Answer the student's actual question directly.
-12. If the student asks for practice questions, provide useful practice questions.
-13. If the student asks for an example, provide a simple example.
-14. Keep the tone encouraging and educational.
+10. Keep the answer clear and reasonably concise.
+11. Do not mention Demo Mode.
+12. Do not mention the API or backend.
+13. Answer the student's actual question directly.
+14. Maintain a friendly and encouraging teaching style.
 `;
 
         // -----------------------------------------
-        // Call OpenAI
+        // Call Gemini
         // -----------------------------------------
 
         const response =
-            await openai.responses.create({
+            await ai.models.generateContent({
 
-                model: "gpt-5.6-luna",
+                model: "gemini-2.5-flash",
 
-                instructions: instructions,
-
-                input: question
+                contents: prompt
 
             });
 
         // -----------------------------------------
-        // Get AI answer
+        // Get Gemini answer
         // -----------------------------------------
 
         const answer =
-            response.output_text?.trim();
+            response.text?.trim();
 
         if (!answer) {
 
             return res.status(500).json({
-                error: "OpenAI returned an empty response."
+                error:
+                    "Gemini returned an empty response."
             });
+
         }
 
         // -----------------------------------------
-        // Send response to Android app
+        // Send answer to Android
         // -----------------------------------------
 
         return res.json({
@@ -131,26 +146,18 @@ Rules:
     } catch (error) {
 
         console.error(
-            "OpenAI error:",
+            "Gemini error:",
             error
         );
-
-        // OpenAI API error
-        if (error?.status) {
-
-            return res.status(error.status).json({
-                error:
-                    error?.message ||
-                    "OpenAI API request failed."
-            });
-        }
 
         return res.status(500).json({
             error:
                 error?.message ||
                 "Something went wrong while generating the AI response."
         });
+
     }
+
 });
 
 // -----------------------------------------
@@ -166,16 +173,18 @@ app.listen(PORT, () => {
         `Study Buddy AI server running on port ${PORT}`
     );
 
-    if (process.env.OPENAI_API_KEY) {
+    if (process.env.GEMINI_API_KEY) {
 
         console.log(
-            "OpenAI API key detected."
+            "Gemini API key detected."
         );
 
     } else {
 
         console.log(
-            "WARNING: OPENAI_API_KEY is missing."
+            "WARNING: GEMINI_API_KEY is missing."
         );
+
     }
+
 });
