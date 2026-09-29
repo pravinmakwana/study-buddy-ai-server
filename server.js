@@ -1,150 +1,572 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "20kb" }));
+app.use(express.json({ limit: "50kb" }));
 
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
-});
+// ============================================================
+// PATH CONFIGURATION
+// ============================================================
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-/* =========================================================
-   HOME / SERVER STATUS
-   ========================================================= */
+const questionsFile = path.join(
+    __dirname,
+    "data",
+    "questions.json"
+);
+
+// ============================================================
+// GEMINI CONFIGURATION
+// ============================================================
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+const GEMINI_MODEL =
+    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+let ai = null;
+
+if (GEMINI_API_KEY) {
+
+    ai = new GoogleGenAI({
+        apiKey: GEMINI_API_KEY
+    });
+
+    console.log("Gemini API key detected.");
+
+} else {
+
+    console.log(
+        "WARNING: GEMINI_API_KEY is missing."
+    );
+}
+
+// ============================================================
+// HOME / SERVER STATUS
+// ============================================================
 
 app.get("/", (req, res) => {
 
     res.json({
         message: "Study Buddy AI Backend is running!",
-
-        ai: process.env.GEMINI_API_KEY
+        ai: GEMINI_API_KEY
             ? "Gemini configured"
-            : "Gemini API key missing"
+            : "Gemini API key missing",
+        quiz: "Quiz API configured"
     });
 
 });
 
+// ============================================================
+// LOAD QUIZ QUESTIONS
+// ============================================================
 
-/* =========================================================
-   GEMINI AI FUNCTION
-   ========================================================= */
-
-async function generateGeminiAnswer(prompt) {
+function loadQuestions() {
 
     try {
 
-        console.log("Sending request to Gemini...");
+        if (!fs.existsSync(questionsFile)) {
 
-        const response =
-            await ai.models.generateContent({
-
-                model: "gemini-3.5-flash-lite",
-
-                contents: prompt
-
-            });
-
-
-        const answer =
-            response.text?.trim();
-
-
-        if (!answer) {
-
-            throw new Error(
-                "Gemini returned an empty response."
+            console.error(
+                "questions.json not found:",
+                questionsFile
             );
 
+            return [];
         }
 
+        const data =
+            fs.readFileSync(
+                questionsFile,
+                "utf8"
+            );
 
-        return answer;
+        const questions =
+            JSON.parse(data);
+
+        if (!Array.isArray(questions)) {
+
+            console.error(
+                "questions.json must contain an array."
+            );
+
+            return [];
+        }
+
+        return questions;
 
     } catch (error) {
 
         console.error(
-            "Gemini error:",
-            error?.message || error
+            "Unable to load questions.json:",
+            error.message
         );
 
-        throw error;
-
+        return [];
     }
-
 }
 
+// ============================================================
+// QUIZ - GET QUESTIONS
+// ============================================================
+//
+// Example:
+//
+// /api/quiz/questions
+//
+// /api/quiz/questions?subject=Biology
+//
+// /api/quiz/questions?subject=Biology&difficulty=Easy&count=5
+//
+// IMPORTANT:
+// correctAnswer and solution are NOT sent here.
+// ============================================================
 
-/* =========================================================
-   AI TUTOR API
-   ========================================================= */
+app.get(
+    "/api/quiz/questions",
+    (req, res) => {
 
-app.post("/api/ask", async (req, res) => {
+        try {
 
-    try {
+            const subject =
+                String(
+                    req.query.subject || "General"
+                ).trim();
 
-        /* -------------------------------------------------
-           GET QUESTION
-           ------------------------------------------------- */
+            const difficulty =
+                String(
+                    req.query.difficulty || "All"
+                ).trim();
 
-        const question =
-            req.body?.question?.trim();
+            let count =
+                parseInt(
+                    req.query.count || "10",
+                    10
+                );
 
+            // Keep quiz count between 1 and 20.
+            if (isNaN(count)) {
+                count = 10;
+            }
 
-        /* -------------------------------------------------
-           GET SUBJECT
-           ------------------------------------------------- */
+            count =
+                Math.max(
+                    1,
+                    Math.min(count, 20)
+                );
 
-        const subject =
-            req.body?.subject?.trim() ||
-            "General";
+            let questions =
+                loadQuestions();
 
+            // ------------------------------------------------
+            // FILTER SUBJECT
+            // ------------------------------------------------
 
-        /* -------------------------------------------------
-           VALIDATE QUESTION
-           ------------------------------------------------- */
+            if (
+                subject &&
+                subject.toLowerCase() !== "general"
+            ) {
 
-        if (!question) {
+                questions =
+                    questions.filter(
+                        question =>
+                            String(
+                                question.subject || ""
+                            ).toLowerCase() ===
+                            subject.toLowerCase()
+                    );
+            }
 
-            return res.status(400).json({
+            // ------------------------------------------------
+            // FILTER DIFFICULTY
+            // ------------------------------------------------
 
-                error:
-                    "Question is required."
+            if (
+                difficulty &&
+                difficulty.toLowerCase() !== "all"
+            ) {
+
+                questions =
+                    questions.filter(
+                        question =>
+                            String(
+                                question.difficulty || ""
+                            ).toLowerCase() ===
+                            difficulty.toLowerCase()
+                    );
+            }
+
+            // ------------------------------------------------
+            // RANDOMIZE QUESTIONS
+            // ------------------------------------------------
+
+            questions =
+                questions.sort(
+                    () => Math.random() - 0.5
+                );
+
+            // ------------------------------------------------
+            // LIMIT QUESTION COUNT
+            // ------------------------------------------------
+
+            questions =
+                questions.slice(
+                    0,
+                    count
+                );
+
+            // ------------------------------------------------
+            // CHECK WHETHER QUESTIONS EXIST
+            // ------------------------------------------------
+
+            if (questions.length === 0) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    error:
+                        "No quiz questions found for the selected subject and difficulty."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // REMOVE ANSWER AND SOLUTION
+            // ------------------------------------------------
+
+            const safeQuestions =
+                questions.map(
+                    question => ({
+
+                        id: question.id,
+
+                        subject:
+                            question.subject || "",
+
+                        topic:
+                            question.topic || "",
+
+                        difficulty:
+                            question.difficulty || "",
+
+                        question:
+                            question.question || "",
+
+                        optionA:
+                            question.optionA || "",
+
+                        optionB:
+                            question.optionB || "",
+
+                        optionC:
+                            question.optionC || "",
+
+                        optionD:
+                            question.optionD || ""
+
+                    })
+                );
+
+            res.json({
+
+                success: true,
+
+                count:
+                    safeQuestions.length,
+
+                questions:
+                    safeQuestions
 
             });
 
-        }
-
-
-        /* -------------------------------------------------
-           CHECK API KEY
-           ------------------------------------------------- */
-
-        if (!process.env.GEMINI_API_KEY) {
+        } catch (error) {
 
             console.error(
-                "GEMINI_API_KEY is missing."
+                "Quiz questions error:",
+                error
             );
 
-            return res.status(500).json({
+            res.status(500).json({
+
+                success: false,
 
                 error:
-                    "Gemini API key is not configured on the server."
+                    "Unable to load quiz questions."
+
+            });
+        }
+    }
+);
+
+// ============================================================
+// QUIZ - SUBMIT ANSWER
+// ============================================================
+//
+// Android sends:
+//
+// {
+//     "questionId": 1,
+//     "selectedAnswer": "D"
+// }
+//
+// Server checks the answer and returns:
+//
+// correct
+// correctAnswer
+// solution
+// ============================================================
+
+app.post(
+    "/api/quiz/submit",
+    (req, res) => {
+
+        try {
+
+            const questionId =
+                Number(
+                    req.body?.questionId
+                );
+
+            const selectedAnswer =
+                String(
+                    req.body?.selectedAnswer || ""
+                )
+                    .trim()
+                    .toUpperCase();
+
+            // ------------------------------------------------
+            // VALIDATION
+            // ------------------------------------------------
+
+            if (
+                !questionId ||
+                !selectedAnswer
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Question ID and selected answer are required."
+
+                });
+            }
+
+            // Only A/B/C/D allowed.
+            if (
+                ![
+                    "A",
+                    "B",
+                    "C",
+                    "D"
+                ].includes(selectedAnswer)
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Selected answer must be A, B, C or D."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // LOAD QUESTIONS
+            // ------------------------------------------------
+
+            const questions =
+                loadQuestions();
+
+            // ------------------------------------------------
+            // FIND QUESTION
+            // ------------------------------------------------
+
+            const question =
+                questions.find(
+                    item =>
+                        Number(item.id) ===
+                        questionId
+                );
+
+            if (!question) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    error:
+                        "Question not found."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // GET CORRECT ANSWER
+            // ------------------------------------------------
+
+            const correctAnswer =
+                String(
+                    question.correctAnswer || ""
+                )
+                    .trim()
+                    .toUpperCase();
+
+            // ------------------------------------------------
+            // CHECK ANSWER
+            // ------------------------------------------------
+
+            const isCorrect =
+                selectedAnswer ===
+                correctAnswer;
+
+            // ------------------------------------------------
+            // RETURN RESULT
+            // ------------------------------------------------
+
+            res.json({
+
+                success: true,
+
+                questionId:
+                    question.id,
+
+                selectedAnswer:
+                    selectedAnswer,
+
+                correct:
+                    isCorrect,
+
+                correctAnswer:
+                    correctAnswer,
+
+                solution:
+                    question.solution || "",
+
+                explanation:
+                    question.explanation || ""
 
             });
 
+        } catch (error) {
+
+            console.error(
+                "Quiz submit error:",
+                error
+            );
+
+            res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Unable to check quiz answer."
+
+            });
         }
+    }
+);
 
+// ============================================================
+// GEMINI - AI TUTOR
+// ============================================================
 
-        /* =================================================
-           AI PROMPT
-           ================================================= */
+async function generateGeminiAnswer(prompt) {
 
-        const prompt = `
+    if (!ai) {
 
+        throw new Error(
+            "Gemini API key is not configured."
+        );
+    }
+
+    console.log(
+        "Sending request to Gemini..."
+    );
+
+    const response =
+        await ai.models.generateContent({
+
+            model: GEMINI_MODEL,
+
+            contents: prompt
+
+        });
+
+    const answer =
+        response.text?.trim();
+
+    if (!answer) {
+
+        throw new Error(
+            "Gemini returned an empty response."
+        );
+    }
+
+    return answer;
+}
+
+// ============================================================
+// AI TUTOR API
+// ============================================================
+
+app.post(
+    "/api/ask",
+    async (req, res) => {
+
+        try {
+
+            const question =
+                req.body?.question?.trim();
+
+            const subject =
+                req.body?.subject?.trim() ||
+                "General";
+
+            // ------------------------------------------------
+            // VALIDATE QUESTION
+            // ------------------------------------------------
+
+            if (!question) {
+
+                return res.status(400).json({
+
+                    error:
+                        "Question is required."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // CHECK GEMINI KEY
+            // ------------------------------------------------
+
+            if (!GEMINI_API_KEY) {
+
+                return res.status(500).json({
+
+                    error:
+                        "Gemini API key is not configured on the server."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // AI PROMPT
+            // ------------------------------------------------
+
+            const prompt = `
 You are Study Buddy AI, an educational AI tutor.
 
 IMPORTANT:
@@ -153,7 +575,6 @@ The student's selected subject is: ${subject}
 The student's question is:
 
 ${question}
-
 
 =================================================
 SUBJECT RULES
@@ -168,35 +589,21 @@ You MUST answer according to the selected subject.
 - If the selected subject is English, answer as an English tutor.
 - If the selected subject is General, answer generally.
 
-
 =================================================
 IMPORTANT SUBJECT BEHAVIOR
 =================================================
 
 1. Never change the selected subject.
-
 2. Never say that the student is in another subject.
-
-3. Never mention Biology when Mathematics is selected unless the student specifically asks about Biology.
-
-4. Never add unrelated subject examples.
-
-5. Answer the exact question asked by the student.
-
-6. For simple questions, keep the answer reasonably short.
-
-7. Explain difficult concepts step by step.
-
-8. For Mathematics, show formulas and calculations clearly.
-
-9. For Mathematics, use simple numerical examples when useful.
-
-10. For Biology and Chemistry, explain scientific concepts accurately.
-
-11. For Physics, explain formulas and physical concepts clearly.
-
-12. For English, explain grammar, vocabulary and writing clearly.
-
+3. Never mention unrelated subjects unless the student asks.
+4. Answer the exact question asked.
+5. For simple questions, keep the answer reasonably short.
+6. Explain difficult concepts step by step.
+7. For Mathematics, show formulas and calculations clearly.
+8. For Mathematics, use simple numerical examples when useful.
+9. For Biology and Chemistry, explain scientific concepts accurately.
+10. For Physics, explain formulas and physical concepts clearly.
+11. For English, explain grammar, vocabulary and writing clearly.
 
 =================================================
 FORMATTING RULES
@@ -208,11 +615,9 @@ FORMATTING RULES
 - Use the bullet character "•".
 - Do NOT use Markdown symbols such as #, ##, ###, **, *, or ---.
 - Do NOT create unnecessary numbered sections.
-- Do NOT put numbers such as "3." on a separate line unless they are part of a numbered list.
 - Keep paragraphs short.
 - Do not repeat the question unnecessarily.
 - Do not mention the API, backend, server or Demo Mode.
-
 
 =================================================
 EXAMPLE
@@ -222,20 +627,7 @@ If the student asks:
 
 "Square Root"
 
-and the selected subject is Mathematics, provide a clear Mathematics explanation such as:
-
-What is a Square Root?
-
-A square root of a number is a value that, when multiplied by itself, gives the original number.
-
-Examples:
-
-• √4 = 2 because 2 × 2 = 4
-• √9 = 3 because 3 × 3 = 9
-• √16 = 4 because 4 × 4 = 16
-
-Do not discuss Biology unless the student specifically asks about Biology.
-
+and the selected subject is Mathematics, provide a clear Mathematics explanation.
 
 =================================================
 FINAL INSTRUCTION
@@ -244,122 +636,145 @@ FINAL INSTRUCTION
 Now answer the student's question.
 `;
 
+            // ------------------------------------------------
+            // GENERATE ANSWER
+            // ------------------------------------------------
 
-        /* -------------------------------------------------
-           CALL GEMINI
-           ------------------------------------------------- */
+            const answer =
+                await generateGeminiAnswer(
+                    prompt
+                );
 
-        const answer =
-            await generateGeminiAnswer(prompt);
+            res.json({
 
+                success: true,
 
-        /* -------------------------------------------------
-           SUCCESS RESPONSE
-           ------------------------------------------------- */
-
-        return res.json({
-
-            answer: answer
-
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "AI Tutor error:",
-            error
-        );
-
-
-        const message =
-            error?.message ||
-            "";
-
-
-        /* =================================================
-           429 - QUOTA EXCEEDED
-           ================================================= */
-
-        if (
-            message.includes("429") ||
-            message.includes("RESOURCE_EXHAUSTED") ||
-            message.toLowerCase().includes("quota")
-        ) {
-
-            return res.status(429).json({
-
-                error:
-                    "AI usage limit reached. Please try again later."
+                answer:
+                    answer
 
             });
 
-        }
+        } catch (error) {
 
+            console.error(
+                "AI Tutor error:",
+                error
+            );
 
-        /* =================================================
-           503 - GEMINI TEMPORARILY BUSY
-           ================================================= */
+            const message =
+                error?.message || "";
 
-        if (
-            message.includes("503") ||
-            message.includes("UNAVAILABLE") ||
-            message.toLowerCase().includes("high demand")
-        ) {
+            // ------------------------------------------------
+            // QUOTA ERROR
+            // ------------------------------------------------
 
-            return res.status(503).json({
+            if (
+                message.includes("429") ||
+                message.includes(
+                    "RESOURCE_EXHAUSTED"
+                ) ||
+                message
+                    .toLowerCase()
+                    .includes("quota")
+            ) {
+
+                return res.status(429).json({
+
+                    error:
+                        "AI usage limit reached. Please try again later."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // SERVER BUSY
+            // ------------------------------------------------
+
+            if (
+                message.includes("503") ||
+                message.includes(
+                    "UNAVAILABLE"
+                ) ||
+                message
+                    .toLowerCase()
+                    .includes("high demand")
+            ) {
+
+                return res.status(503).json({
+
+                    error:
+                        "AI service is temporarily busy. Please try again."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // MODEL ERROR
+            // ------------------------------------------------
+
+            if (
+                message.includes("404") ||
+                message
+                    .toLowerCase()
+                    .includes("not found")
+            ) {
+
+                return res.status(500).json({
+
+                    error:
+                        "The configured Gemini model is unavailable. Please check GEMINI_MODEL in Render."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // GENERAL ERROR
+            // ------------------------------------------------
+
+            return res.status(500).json({
 
                 error:
-                    "AI service is temporarily busy. Please try again in a few seconds."
+                    "Something went wrong while generating the AI response."
 
             });
-
         }
-
-
-        /* =================================================
-           OTHER ERROR
-           ================================================= */
-
-        return res.status(500).json({
-
-            error:
-                "Something went wrong while generating the AI response."
-
-        });
-
     }
+);
 
-});
-
-
-/* =========================================================
-   START SERVER
-   ========================================================= */
+// ============================================================
+// START SERVER
+// ============================================================
 
 const PORT =
     process.env.PORT || 3000;
 
-
-app.listen(PORT, () => {
-
-    console.log(
-        `Study Buddy AI server running on port ${PORT}`
-    );
-
-
-    if (process.env.GEMINI_API_KEY) {
+app.listen(
+    PORT,
+    () => {
 
         console.log(
-            "Gemini API key detected."
+            `Study Buddy AI server running on port ${PORT}`
         );
-
-    } else {
 
         console.log(
-            "WARNING: GEMINI_API_KEY is missing."
+            `Quiz questions file: ${questionsFile}`
         );
 
+        console.log(
+            `Gemini model: ${GEMINI_MODEL}`
+        );
+
+        if (GEMINI_API_KEY) {
+
+            console.log(
+                "Gemini API key detected."
+            );
+
+        } else {
+
+            console.log(
+                "WARNING: GEMINI_API_KEY is missing."
+            );
+        }
     }
-
-});
+);
