@@ -27,10 +27,12 @@ const questionsFile = path.join(
 // GEMINI CONFIGURATION
 // ============================================================
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY =
+    process.env.GEMINI_API_KEY;
 
 const GEMINI_MODEL =
-    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+    process.env.GEMINI_MODEL ||
+    "gemini-3.5-flash-lite";
 
 let ai = null;
 
@@ -56,11 +58,18 @@ if (GEMINI_API_KEY) {
 app.get("/", (req, res) => {
 
     res.json({
-        message: "Study Buddy AI Backend is running!",
-        ai: GEMINI_API_KEY
-            ? "Gemini configured"
-            : "Gemini API key missing",
-        quiz: "Quiz API configured"
+
+        message:
+            "Study Buddy AI Backend is running!",
+
+        ai:
+            GEMINI_API_KEY
+                ? "Gemini configured"
+                : "Gemini API key missing",
+
+        quiz:
+            "Quiz API configured"
+
     });
 
 });
@@ -118,7 +127,7 @@ function loadQuestions() {
 // QUIZ - GET QUESTIONS
 // ============================================================
 //
-// Example:
+// Examples:
 //
 // /api/quiz/questions
 //
@@ -127,7 +136,7 @@ function loadQuestions() {
 // /api/quiz/questions?subject=Biology&difficulty=Easy&count=5
 //
 // IMPORTANT:
-// correctAnswer and solution are NOT sent here.
+// correctAnswer and solution are NOT sent to Android.
 // ============================================================
 
 app.get(
@@ -138,33 +147,59 @@ app.get(
 
             const subject =
                 String(
-                    req.query.subject || "General"
+                    req.query.subject ||
+                    "General"
                 ).trim();
 
             const difficulty =
                 String(
-                    req.query.difficulty || "All"
+                    req.query.difficulty ||
+                    "All"
                 ).trim();
 
             let count =
                 parseInt(
-                    req.query.count || "10",
+                    req.query.count ||
+                    "10",
                     10
                 );
 
-            // Keep quiz count between 1 and 20.
+            // ------------------------------------------------
+            // VALIDATE QUESTION COUNT
+            // ------------------------------------------------
+
             if (isNaN(count)) {
+
                 count = 10;
             }
 
             count =
                 Math.max(
                     1,
-                    Math.min(count, 20)
+                    Math.min(
+                        count,
+                        20
+                    )
                 );
+
+            // ------------------------------------------------
+            // LOAD QUESTIONS
+            // ------------------------------------------------
 
             let questions =
                 loadQuestions();
+
+            if (questions.length === 0) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    error:
+                        "No questions are available on the server."
+
+                });
+            }
 
             // ------------------------------------------------
             // FILTER SUBJECT
@@ -172,16 +207,21 @@ app.get(
 
             if (
                 subject &&
-                subject.toLowerCase() !== "general"
+                subject.toLowerCase() !==
+                    "general"
             ) {
 
                 questions =
                     questions.filter(
                         question =>
                             String(
-                                question.subject || ""
-                            ).toLowerCase() ===
-                            subject.toLowerCase()
+                                question.subject ||
+                                ""
+                            )
+                                .trim()
+                                .toLowerCase() ===
+                            subject
+                                .toLowerCase()
                     );
             }
 
@@ -191,26 +231,32 @@ app.get(
 
             if (
                 difficulty &&
-                difficulty.toLowerCase() !== "all"
+                difficulty.toLowerCase() !==
+                    "all"
             ) {
 
                 questions =
                     questions.filter(
                         question =>
                             String(
-                                question.difficulty || ""
-                            ).toLowerCase() ===
-                            difficulty.toLowerCase()
+                                question.difficulty ||
+                                ""
+                            )
+                                .trim()
+                                .toLowerCase() ===
+                            difficulty
+                                .toLowerCase()
                     );
             }
 
             // ------------------------------------------------
-            // RANDOMIZE QUESTIONS
+            // RANDOMIZE
             // ------------------------------------------------
 
             questions =
                 questions.sort(
-                    () => Math.random() - 0.5
+                    () =>
+                        Math.random() - 0.5
                 );
 
             // ------------------------------------------------
@@ -224,10 +270,12 @@ app.get(
                 );
 
             // ------------------------------------------------
-            // CHECK WHETHER QUESTIONS EXIST
+            // NO QUESTIONS FOUND
             // ------------------------------------------------
 
-            if (questions.length === 0) {
+            if (
+                questions.length === 0
+            ) {
 
                 return res.status(404).json({
 
@@ -240,43 +288,60 @@ app.get(
             }
 
             // ------------------------------------------------
-            // REMOVE ANSWER AND SOLUTION
+            // REMOVE ANSWERS
+            // ------------------------------------------------
+            //
+            // Never send correctAnswer or solution
+            // while the quiz is being attempted.
             // ------------------------------------------------
 
             const safeQuestions =
                 questions.map(
                     question => ({
 
-                        id: question.id,
+                        id:
+                            question.id,
 
                         subject:
-                            question.subject || "",
+                            question.subject ||
+                            "",
 
                         topic:
-                            question.topic || "",
+                            question.topic ||
+                            "",
 
                         difficulty:
-                            question.difficulty || "",
+                            question.difficulty ||
+                            "",
 
                         question:
-                            question.question || "",
+                            question.question ||
+                            "",
 
                         optionA:
-                            question.optionA || "",
+                            question.optionA ||
+                            "",
 
                         optionB:
-                            question.optionB || "",
+                            question.optionB ||
+                            "",
 
                         optionC:
-                            question.optionC || "",
+                            question.optionC ||
+                            "",
 
                         optionD:
-                            question.optionD || ""
+                            question.optionD ||
+                            ""
 
                     })
                 );
 
-            res.json({
+            // ------------------------------------------------
+            // RESPONSE
+            // ------------------------------------------------
+
+            return res.json({
 
                 success: true,
 
@@ -295,7 +360,7 @@ app.get(
                 error
             );
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -311,18 +376,35 @@ app.get(
 // QUIZ - SUBMIT ANSWER
 // ============================================================
 //
-// Android sends:
+// Android can send:
 //
 // {
 //     "questionId": 1,
 //     "selectedAnswer": "D"
 // }
 //
-// Server checks the answer and returns:
+// OR:
 //
-// correct
-// correctAnswer
-// solution
+// {
+//     "id": 1,
+//     "selectedAnswer": "D"
+// }
+//
+// OR:
+//
+// {
+//     "questionId": 1,
+//     "answer": "D"
+// }
+//
+// The server can also accept the actual option text:
+//
+// {
+//     "questionId": 1,
+//     "selectedAnswer": "Organ system"
+// }
+//
+// The server converts the option text into A/B/C/D.
 // ============================================================
 
 app.post(
@@ -331,53 +413,82 @@ app.post(
 
         try {
 
-            const questionId =
-                Number(
-                    req.body?.questionId
-                );
+            // ------------------------------------------------
+            // LOG REQUEST
+            // ------------------------------------------------
 
-            const selectedAnswer =
-                String(
-                    req.body?.selectedAnswer || ""
-                )
-                    .trim()
-                    .toUpperCase();
+            console.log(
+                "Quiz submit request:",
+                JSON.stringify(req.body)
+            );
 
             // ------------------------------------------------
-            // VALIDATION
+            // GET QUESTION ID
+            // ------------------------------------------------
+
+            const rawQuestionId =
+                req.body?.questionId ??
+                req.body?.id;
+
+            const questionId =
+                Number(
+                    rawQuestionId
+                );
+
+            // ------------------------------------------------
+            // GET SELECTED ANSWER
+            // ------------------------------------------------
+
+            let selectedAnswer =
+                String(
+                    req.body?.selectedAnswer ??
+                    req.body?.answer ??
+                    req.body?.selectedOption ??
+                    ""
+                ).trim();
+
+            // ------------------------------------------------
+            // VALIDATE QUESTION ID
             // ------------------------------------------------
 
             if (
-                !questionId ||
-                !selectedAnswer
+                !Number.isInteger(
+                    questionId
+                ) ||
+                questionId <= 0
             ) {
+
+                console.log(
+                    "Invalid question ID:",
+                    rawQuestionId
+                );
 
                 return res.status(400).json({
 
                     success: false,
 
                     error:
-                        "Question ID and selected answer are required."
+                        "Valid questionId is required."
 
                 });
             }
 
-            // Only A/B/C/D allowed.
-            if (
-                ![
-                    "A",
-                    "B",
-                    "C",
-                    "D"
-                ].includes(selectedAnswer)
-            ) {
+            // ------------------------------------------------
+            // VALIDATE ANSWER EXISTS
+            // ------------------------------------------------
+
+            if (!selectedAnswer) {
+
+                console.log(
+                    "Selected answer is missing."
+                );
 
                 return res.status(400).json({
 
                     success: false,
 
                     error:
-                        "Selected answer must be A, B, C or D."
+                        "Selected answer is required."
 
                 });
             }
@@ -388,6 +499,20 @@ app.post(
 
             const questions =
                 loadQuestions();
+
+            if (
+                questions.length === 0
+            ) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    error:
+                        "Unable to load quiz questions."
+
+                });
+            }
 
             // ------------------------------------------------
             // FIND QUESTION
@@ -402,6 +527,11 @@ app.post(
 
             if (!question) {
 
+                console.log(
+                    "Question not found:",
+                    questionId
+                );
+
                 return res.status(404).json({
 
                     success: false,
@@ -413,15 +543,164 @@ app.post(
             }
 
             // ------------------------------------------------
+            // NORMALIZE ANSWER
+            // ------------------------------------------------
+
+            const originalAnswer =
+                selectedAnswer;
+
+            selectedAnswer =
+                selectedAnswer
+                    .trim()
+                    .toUpperCase();
+
+            // ------------------------------------------------
+            // IF ANSWER IS A/B/C/D
+            // ------------------------------------------------
+
+            if (
+                [
+                    "A",
+                    "B",
+                    "C",
+                    "D"
+                ].includes(
+                    selectedAnswer
+                )
+            ) {
+
+                // Already valid.
+
+            } else {
+
+                // ------------------------------------------------
+                // CONVERT OPTION TEXT TO A/B/C/D
+                // ------------------------------------------------
+
+                const optionA =
+                    String(
+                        question.optionA ||
+                        ""
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                const optionB =
+                    String(
+                        question.optionB ||
+                        ""
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                const optionC =
+                    String(
+                        question.optionC ||
+                        ""
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                const optionD =
+                    String(
+                        question.optionD ||
+                        ""
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                if (
+                    selectedAnswer ===
+                    optionA
+                ) {
+
+                    selectedAnswer =
+                        "A";
+
+                } else if (
+                    selectedAnswer ===
+                    optionB
+                ) {
+
+                    selectedAnswer =
+                        "B";
+
+                } else if (
+                    selectedAnswer ===
+                    optionC
+                ) {
+
+                    selectedAnswer =
+                        "C";
+
+                } else if (
+                    selectedAnswer ===
+                    optionD
+                ) {
+
+                    selectedAnswer =
+                        "D";
+
+                } else {
+
+                    console.log(
+                        "Invalid selected answer:",
+                        originalAnswer
+                    );
+
+                    return res.status(400).json({
+
+                        success: false,
+
+                        error:
+                            "Selected answer must be A, B, C or D, or match one of the question options."
+
+                    });
+                }
+            }
+
+            // ------------------------------------------------
             // GET CORRECT ANSWER
             // ------------------------------------------------
 
             const correctAnswer =
                 String(
-                    question.correctAnswer || ""
+                    question.correctAnswer ||
+                    ""
                 )
                     .trim()
                     .toUpperCase();
+
+            // ------------------------------------------------
+            // VALIDATE CORRECT ANSWER
+            // ------------------------------------------------
+
+            if (
+                ![
+                    "A",
+                    "B",
+                    "C",
+                    "D"
+                ].includes(
+                    correctAnswer
+                )
+            ) {
+
+                console.error(
+                    "Invalid correctAnswer in questions.json:",
+                    question.id,
+                    question.correctAnswer
+                );
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    error:
+                        "Invalid correct answer configured for this question."
+
+                });
+            }
 
             // ------------------------------------------------
             // CHECK ANSWER
@@ -432,10 +711,18 @@ app.post(
                 correctAnswer;
 
             // ------------------------------------------------
+            // LOG RESULT
+            // ------------------------------------------------
+
+            console.log(
+                `Question ${questionId}: Selected=${selectedAnswer}, Correct=${correctAnswer}, Result=${isCorrect}`
+            );
+
+            // ------------------------------------------------
             // RETURN RESULT
             // ------------------------------------------------
 
-            res.json({
+            return res.json({
 
                 success: true,
 
@@ -452,10 +739,12 @@ app.post(
                     correctAnswer,
 
                 solution:
-                    question.solution || "",
+                    question.solution ||
+                    "",
 
                 explanation:
-                    question.explanation || ""
+                    question.explanation ||
+                    ""
 
             });
 
@@ -466,7 +755,7 @@ app.post(
                 error
             );
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -479,10 +768,12 @@ app.post(
 );
 
 // ============================================================
-// GEMINI - AI TUTOR
+// GEMINI - GENERATE ANSWER
 // ============================================================
 
-async function generateGeminiAnswer(prompt) {
+async function generateGeminiAnswer(
+    prompt
+) {
 
     if (!ai) {
 
@@ -498,9 +789,11 @@ async function generateGeminiAnswer(prompt) {
     const response =
         await ai.models.generateContent({
 
-            model: GEMINI_MODEL,
+            model:
+                GEMINI_MODEL,
 
-            contents: prompt
+            contents:
+                prompt
 
         });
 
@@ -645,7 +938,7 @@ Now answer the student's question.
                     prompt
                 );
 
-            res.json({
+            return res.json({
 
                 success: true,
 
@@ -697,7 +990,9 @@ Now answer the student's question.
                 ) ||
                 message
                     .toLowerCase()
-                    .includes("high demand")
+                    .includes(
+                        "high demand"
+                    )
             ) {
 
                 return res.status(503).json({
@@ -716,7 +1011,9 @@ Now answer the student's question.
                 message.includes("404") ||
                 message
                     .toLowerCase()
-                    .includes("not found")
+                    .includes(
+                        "not found"
+                    )
             ) {
 
                 return res.status(500).json({
