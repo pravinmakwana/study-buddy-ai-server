@@ -75,11 +75,894 @@ app.get("/", (req, res) => {
                 : "Gemini API key missing",
 
         quiz:
-            "Quiz API configured"
+            "Quiz API configured",
+
+        auth:
+            "Authentication API configured"
 
     });
 
 });
+
+// ============================================================
+// USER AUTHENTICATION HELPER FUNCTIONS
+// ============================================================
+
+function loadUsers() {
+
+    try {
+
+        if (!fs.existsSync(usersFile)) {
+
+            fs.writeFileSync(
+                usersFile,
+                JSON.stringify(
+                    {
+                        users: []
+                    },
+                    null,
+                    2
+                )
+            );
+
+            return [];
+        }
+
+        const data =
+            fs.readFileSync(
+                usersFile,
+                "utf8"
+            );
+
+        if (!data.trim()) {
+
+            return [];
+        }
+
+        const parsed =
+            JSON.parse(data);
+
+        // Support:
+        // { "users": [] }
+
+        if (
+            parsed &&
+            Array.isArray(parsed.users)
+        ) {
+
+            return parsed.users;
+        }
+
+        // Also support:
+        // [ ... ]
+
+        if (
+            Array.isArray(parsed)
+        ) {
+
+            return parsed;
+        }
+
+        console.error(
+            "users.json must contain a users array."
+        );
+
+        return [];
+
+    } catch (error) {
+
+        console.error(
+            "Unable to load users.json:",
+            error.message
+        );
+
+        return [];
+    }
+}
+
+
+// ============================================================
+// SAVE USERS
+// ============================================================
+
+function saveUsers(users) {
+
+    try {
+
+        fs.writeFileSync(
+
+            usersFile,
+
+            JSON.stringify(
+                {
+                    users: users
+                },
+                null,
+                2
+            )
+
+        );
+
+        return true;
+
+    } catch (error) {
+
+        console.error(
+            "Unable to save users.json:",
+            error.message
+        );
+
+        return false;
+    }
+}
+
+
+// ============================================================
+// NORMALIZE EMAIL
+// ============================================================
+
+function normalizeEmail(email) {
+
+    return String(
+        email || ""
+    )
+        .trim()
+        .toLowerCase();
+}
+
+
+// ============================================================
+// HASH PASSWORD
+// ============================================================
+
+function hashPassword(
+    password,
+    salt = null
+) {
+
+    const passwordSalt =
+        salt ||
+        crypto.randomBytes(16).toString("hex");
+
+    const hash =
+        crypto
+            .scryptSync(
+                password,
+                passwordSalt,
+                64
+            )
+            .toString("hex");
+
+    return {
+
+        salt:
+            passwordSalt,
+
+        hash:
+            hash
+
+    };
+}
+
+
+// ============================================================
+// VERIFY PASSWORD
+// ============================================================
+
+function verifyPassword(
+    password,
+    salt,
+    storedHash
+) {
+
+    try {
+
+        if (
+            !password ||
+            !salt ||
+            !storedHash
+        ) {
+
+            return false;
+        }
+
+        const hash =
+            crypto
+                .scryptSync(
+                    password,
+                    salt,
+                    64
+                )
+                .toString("hex");
+
+        const hashBuffer =
+            Buffer.from(
+                hash,
+                "hex"
+            );
+
+        const storedBuffer =
+            Buffer.from(
+                storedHash,
+                "hex"
+            );
+
+        if (
+            hashBuffer.length !==
+            storedBuffer.length
+        ) {
+
+            return false;
+        }
+
+        return crypto.timingSafeEqual(
+            hashBuffer,
+            storedBuffer
+        );
+
+    } catch (error) {
+
+        console.error(
+            "Password verification error:",
+            error.message
+        );
+
+        return false;
+    }
+}
+
+
+// ============================================================
+// CREATE AUTH TOKEN
+// ============================================================
+
+function createAuthToken() {
+
+    return crypto
+        .randomBytes(32)
+        .toString("hex");
+}
+
+
+// ============================================================
+// GET AUTH TOKEN FROM REQUEST
+// ============================================================
+
+function getTokenFromRequest(req) {
+
+    const authorization =
+        req.headers.authorization ||
+        "";
+
+    if (
+        !authorization.startsWith(
+            "Bearer "
+        )
+    ) {
+
+        return null;
+    }
+
+    return authorization
+        .substring(7)
+        .trim();
+}
+
+
+// ============================================================
+// GET USER FROM AUTH TOKEN
+// ============================================================
+
+function getUserFromRequest(req) {
+
+    const token =
+        getTokenFromRequest(req);
+
+    if (!token) {
+
+        return null;
+    }
+
+    const users =
+        loadUsers();
+
+    return users.find(
+        user =>
+            user.authToken === token
+    ) || null;
+}
+
+
+// ============================================================
+// AUTH - SIGN UP
+// ============================================================
+
+app.post(
+    "/api/auth/signup",
+    (req, res) => {
+
+        try {
+
+            console.log(
+                "Signup request received."
+            );
+
+            const name =
+                String(
+                    req.body?.name || ""
+                ).trim();
+
+            const email =
+                normalizeEmail(
+                    req.body?.email
+                );
+
+            const password =
+                String(
+                    req.body?.password || ""
+                );
+
+            const confirmPassword =
+                String(
+                    req.body?.confirmPassword || ""
+                );
+
+            // ------------------------------------------------
+            // VALIDATE NAME
+            // ------------------------------------------------
+
+            if (!name) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Name is required."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // VALIDATE EMAIL
+            // ------------------------------------------------
+
+            if (!email) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Email is required."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // VALIDATE EMAIL FORMAT
+            // ------------------------------------------------
+
+            const emailRegex =
+                /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            if (
+                !emailRegex.test(email)
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Please enter a valid email address."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // VALIDATE PASSWORD
+            // ------------------------------------------------
+
+            if (
+                password.length < 6
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Password must be at least 6 characters."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // VALIDATE CONFIRM PASSWORD
+            // ------------------------------------------------
+
+            if (
+                password !==
+                confirmPassword
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Passwords do not match."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // LOAD USERS
+            // ------------------------------------------------
+
+            const users =
+                loadUsers();
+
+            // ------------------------------------------------
+            // CHECK DUPLICATE EMAIL
+            // ------------------------------------------------
+
+            const existingUser =
+                users.find(
+                    user =>
+                        normalizeEmail(
+                            user.email
+                        ) === email
+                );
+
+            if (existingUser) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    error:
+                        "An account already exists with this email."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // HASH PASSWORD
+            // ------------------------------------------------
+
+            const passwordData =
+                hashPassword(
+                    password
+                );
+
+            // ------------------------------------------------
+            // CREATE USER
+            // ------------------------------------------------
+
+            const newUser = {
+
+                id:
+                    crypto.randomUUID(),
+
+                name:
+                    name,
+
+                email:
+                    email,
+
+                passwordHash:
+                    passwordData.hash,
+
+                passwordSalt:
+                    passwordData.salt,
+
+                authToken:
+                    null,
+
+                createdAt:
+                    new Date().toISOString()
+
+            };
+
+            // ------------------------------------------------
+            // ADD USER
+            // ------------------------------------------------
+
+            users.push(
+                newUser
+            );
+
+            // ------------------------------------------------
+            // SAVE USER
+            // ------------------------------------------------
+
+            const saved =
+                saveUsers(
+                    users
+                );
+
+            if (!saved) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    error:
+                        "Unable to create account."
+
+                });
+            }
+
+            console.log(
+                "New user registered:",
+                email
+            );
+
+            // ------------------------------------------------
+            // RESPONSE
+            // ------------------------------------------------
+
+            return res.status(201).json({
+
+                success: true,
+
+                message:
+                    "Account created successfully."
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Signup error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Something went wrong while creating the account."
+
+            });
+        }
+    }
+);
+
+
+// ============================================================
+// AUTH - SIGN IN
+// ============================================================
+
+app.post(
+    "/api/auth/signin",
+    (req, res) => {
+
+        try {
+
+            console.log(
+                "Signin request received."
+            );
+
+            const email =
+                normalizeEmail(
+                    req.body?.email
+                );
+
+            const password =
+                String(
+                    req.body?.password || ""
+                );
+
+            // ------------------------------------------------
+            // VALIDATE INPUT
+            // ------------------------------------------------
+
+            if (
+                !email ||
+                !password
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "Email and password are required."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // LOAD USERS
+            // ------------------------------------------------
+
+            const users =
+                loadUsers();
+
+            // ------------------------------------------------
+            // FIND USER
+            // ------------------------------------------------
+
+            const userIndex =
+                users.findIndex(
+                    user =>
+                        normalizeEmail(
+                            user.email
+                        ) === email
+                );
+
+            if (
+                userIndex === -1
+            ) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Invalid email or password."
+
+                });
+            }
+
+            const user =
+                users[userIndex];
+
+            // ------------------------------------------------
+            // VERIFY PASSWORD
+            // ------------------------------------------------
+
+            const passwordCorrect =
+                verifyPassword(
+                    password,
+                    user.passwordSalt,
+                    user.passwordHash
+                );
+
+            if (!passwordCorrect) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Invalid email or password."
+
+                });
+            }
+
+            // ------------------------------------------------
+            // CREATE AUTH TOKEN
+            // ------------------------------------------------
+
+            const authToken =
+                createAuthToken();
+
+            // ------------------------------------------------
+            // SAVE AUTH TOKEN
+            // ------------------------------------------------
+
+            users[userIndex].authToken =
+                authToken;
+
+            const saved =
+                saveUsers(
+                    users
+                );
+
+            if (!saved) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    error:
+                        "Unable to create authentication session."
+
+                });
+            }
+
+            console.log(
+                "User signed in:",
+                email
+            );
+
+            // ------------------------------------------------
+            // RESPONSE
+            // ------------------------------------------------
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "Sign in successful.",
+
+                token:
+                    authToken,
+
+                user: {
+
+                    id:
+                        user.id,
+
+                    name:
+                        user.name,
+
+                    email:
+                        user.email
+
+                }
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Signin error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Something went wrong while signing in."
+
+            });
+        }
+    }
+);
+
+
+// ============================================================
+// AUTH - GET CURRENT USER
+// ============================================================
+
+app.get(
+    "/api/auth/me",
+    (req, res) => {
+
+        try {
+
+            const user =
+                getUserFromRequest(
+                    req
+                );
+
+            if (!user) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Invalid or expired authentication token."
+
+                });
+            }
+
+            return res.json({
+
+                success: true,
+
+                user: {
+
+                    id:
+                        user.id,
+
+                    name:
+                        user.name,
+
+                    email:
+                        user.email
+
+                }
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Auth me error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Unable to verify authentication."
+
+            });
+        }
+    }
+);
+
+
+// ============================================================
+// AUTH - LOGOUT
+// ============================================================
+
+app.post(
+    "/api/auth/logout",
+    (req, res) => {
+
+        try {
+
+            const token =
+                getTokenFromRequest(
+                    req
+                );
+
+            if (!token) {
+
+                return res.json({
+
+                    success: true,
+
+                    message:
+                        "Already logged out."
+
+                });
+            }
+
+            const users =
+                loadUsers();
+
+            const userIndex =
+                users.findIndex(
+                    user =>
+                        user.authToken ===
+                        token
+                );
+
+            if (
+                userIndex !== -1
+            ) {
+
+                users[userIndex].authToken =
+                    null;
+
+                saveUsers(
+                    users
+                );
+            }
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "Logged out successfully."
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Logout error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Unable to logout."
+
+            });
+        }
+    }
+);
+
 
 // ============================================================
 // LOAD QUIZ QUESTIONS
@@ -130,20 +1013,9 @@ function loadQuestions() {
     }
 }
 
+
 // ============================================================
 // QUIZ - GET QUESTIONS
-// ============================================================
-//
-// Examples:
-//
-// /api/quiz/questions
-//
-// /api/quiz/questions?subject=Biology
-//
-// /api/quiz/questions?subject=Biology&difficulty=Easy&count=5
-//
-// IMPORTANT:
-// correctAnswer and solution are NOT sent to Android.
 // ============================================================
 
 app.get(
@@ -196,7 +1068,9 @@ app.get(
             let questions =
                 loadQuestions();
 
-            if (questions.length === 0) {
+            if (
+                questions.length === 0
+            ) {
 
                 return res.status(500).json({
 
@@ -227,8 +1101,7 @@ app.get(
                             )
                                 .trim()
                                 .toLowerCase() ===
-                            subject
-                                .toLowerCase()
+                            subject.toLowerCase()
                     );
             }
 
@@ -251,8 +1124,7 @@ app.get(
                             )
                                 .trim()
                                 .toLowerCase() ===
-                            difficulty
-                                .toLowerCase()
+                            difficulty.toLowerCase()
                     );
             }
 
@@ -296,10 +1168,6 @@ app.get(
 
             // ------------------------------------------------
             // REMOVE ANSWERS
-            // ------------------------------------------------
-            //
-            // Never send correctAnswer or solution
-            // while the quiz is being attempted.
             // ------------------------------------------------
 
             const safeQuestions =
@@ -379,39 +1247,9 @@ app.get(
     }
 );
 
+
 // ============================================================
 // QUIZ - SUBMIT ANSWER
-// ============================================================
-//
-// Android can send:
-//
-// {
-//     "questionId": 1,
-//     "selectedAnswer": "D"
-// }
-//
-// OR:
-//
-// {
-//     "id": 1,
-//     "selectedAnswer": "D"
-// }
-//
-// OR:
-//
-// {
-//     "questionId": 1,
-//     "answer": "D"
-// }
-//
-// The server can also accept the actual option text:
-//
-// {
-//     "questionId": 1,
-//     "selectedAnswer": "Organ system"
-// }
-//
-// The server converts the option text into A/B/C/D.
 // ============================================================
 
 app.post(
@@ -481,7 +1319,7 @@ app.post(
             }
 
             // ------------------------------------------------
-            // VALIDATE ANSWER EXISTS
+            // VALIDATE ANSWER
             // ------------------------------------------------
 
             if (!selectedAnswer) {
@@ -774,6 +1612,7 @@ app.post(
     }
 );
 
+
 // ============================================================
 // GEMINI - GENERATE ANSWER
 // ============================================================
@@ -816,6 +1655,7 @@ async function generateGeminiAnswer(
 
     return answer;
 }
+
 
 // ============================================================
 // AI TUTOR API
@@ -1045,6 +1885,7 @@ Now answer the student's question.
     }
 );
 
+
 // ============================================================
 // START SERVER
 // ============================================================
@@ -1065,6 +1906,10 @@ app.listen(
         );
 
         console.log(
+            `Users file: ${usersFile}`
+        );
+
+        console.log(
             `Gemini model: ${GEMINI_MODEL}`
         );
 
@@ -1082,140 +1927,3 @@ app.listen(
         }
     }
 );
-
-
-function loadUsers() {
-    try {
-        if (!fs.existsSync(usersFile)) {
-            fs.writeFileSync(
-                usersFile,
-                JSON.stringify({ users: [] }, null, 2)
-            );
-        }
-
-        const data = fs.readFileSync(usersFile, "utf8");
-
-        if (!data.trim()) {
-            return [];
-        }
-
-        const parsed = JSON.parse(data);
-
-        if (Array.isArray(parsed)) {
-            return parsed;
-        }
-
-        if (Array.isArray(parsed.users)) {
-            return parsed.users;
-        }
-
-        return [];
-    } catch (error) {
-        console.error("Unable to load users.json:", error.message);
-        return [];
-    }
-}
-
-
-function saveUsers(users) {
-    try {
-        fs.writeFileSync(
-            usersFile,
-            JSON.stringify(
-                {
-                    users: users
-                },
-                null,
-                2
-            )
-        );
-
-        return true;
-    } catch (error) {
-        console.error("Unable to save users.json:", error.message);
-        return false;
-    }
-}
-
-
-function normalizeEmail(email) {
-    return String(email || "")
-        .trim()
-        .toLowerCase();
-}
-
-
-function hashPassword(password, salt = null) {
-    const passwordSalt =
-        salt ||
-        crypto.randomBytes(16).toString("hex");
-
-    const hash = crypto
-        .scryptSync(password, passwordSalt, 64)
-        .toString("hex");
-
-    return {
-        salt: passwordSalt,
-        hash: hash
-    };
-}
-
-
-function verifyPassword(password, salt, storedHash) {
-    try {
-        const hash = crypto
-            .scryptSync(password, salt, 64)
-            .toString("hex");
-
-        const hashBuffer = Buffer.from(hash, "hex");
-        const storedBuffer = Buffer.from(
-            storedHash,
-            "hex"
-        );
-
-        if (hashBuffer.length !== storedBuffer.length) {
-            return false;
-        }
-
-        return crypto.timingSafeEqual(
-            hashBuffer,
-            storedBuffer
-        );
-    } catch (error) {
-        return false;
-    }
-}
-
-
-function createAuthToken() {
-    return crypto.randomBytes(32).toString("hex");
-}
-
-
-function getTokenFromRequest(req) {
-    const authorization =
-        req.headers.authorization || "";
-
-    if (!authorization.startsWith("Bearer ")) {
-        return null;
-    }
-
-    return authorization
-        .substring(7)
-        .trim();
-}
-
-
-function getUserFromRequest(req) {
-    const token = getTokenFromRequest(req);
-
-    if (!token) {
-        return null;
-    }
-
-    const users = loadUsers();
-
-    return users.find(
-        user => user.authToken === token
-    ) || null;
-}
