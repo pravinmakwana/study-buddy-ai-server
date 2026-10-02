@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 
@@ -21,6 +22,12 @@ const questionsFile = path.join(
     __dirname,
     "data",
     "questions.json"
+);
+
+const usersFile = path.join(
+    __dirname,
+    "data",
+    "users.json"
 );
 
 // ============================================================
@@ -1075,3 +1082,140 @@ app.listen(
         }
     }
 );
+
+
+function loadUsers() {
+    try {
+        if (!fs.existsSync(usersFile)) {
+            fs.writeFileSync(
+                usersFile,
+                JSON.stringify({ users: [] }, null, 2)
+            );
+        }
+
+        const data = fs.readFileSync(usersFile, "utf8");
+
+        if (!data.trim()) {
+            return [];
+        }
+
+        const parsed = JSON.parse(data);
+
+        if (Array.isArray(parsed)) {
+            return parsed;
+        }
+
+        if (Array.isArray(parsed.users)) {
+            return parsed.users;
+        }
+
+        return [];
+    } catch (error) {
+        console.error("Unable to load users.json:", error.message);
+        return [];
+    }
+}
+
+
+function saveUsers(users) {
+    try {
+        fs.writeFileSync(
+            usersFile,
+            JSON.stringify(
+                {
+                    users: users
+                },
+                null,
+                2
+            )
+        );
+
+        return true;
+    } catch (error) {
+        console.error("Unable to save users.json:", error.message);
+        return false;
+    }
+}
+
+
+function normalizeEmail(email) {
+    return String(email || "")
+        .trim()
+        .toLowerCase();
+}
+
+
+function hashPassword(password, salt = null) {
+    const passwordSalt =
+        salt ||
+        crypto.randomBytes(16).toString("hex");
+
+    const hash = crypto
+        .scryptSync(password, passwordSalt, 64)
+        .toString("hex");
+
+    return {
+        salt: passwordSalt,
+        hash: hash
+    };
+}
+
+
+function verifyPassword(password, salt, storedHash) {
+    try {
+        const hash = crypto
+            .scryptSync(password, salt, 64)
+            .toString("hex");
+
+        const hashBuffer = Buffer.from(hash, "hex");
+        const storedBuffer = Buffer.from(
+            storedHash,
+            "hex"
+        );
+
+        if (hashBuffer.length !== storedBuffer.length) {
+            return false;
+        }
+
+        return crypto.timingSafeEqual(
+            hashBuffer,
+            storedBuffer
+        );
+    } catch (error) {
+        return false;
+    }
+}
+
+
+function createAuthToken() {
+    return crypto.randomBytes(32).toString("hex");
+}
+
+
+function getTokenFromRequest(req) {
+    const authorization =
+        req.headers.authorization || "";
+
+    if (!authorization.startsWith("Bearer ")) {
+        return null;
+    }
+
+    return authorization
+        .substring(7)
+        .trim();
+}
+
+
+function getUserFromRequest(req) {
+    const token = getTokenFromRequest(req);
+
+    if (!token) {
+        return null;
+    }
+
+    const users = loadUsers();
+
+    return users.find(
+        user => user.authToken === token
+    ) || null;
+}
