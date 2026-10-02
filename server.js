@@ -3,6 +3,7 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 
