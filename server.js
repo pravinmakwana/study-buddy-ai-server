@@ -7,33 +7,50 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 
-const app = express();
-
-app.use(cors());
-app.use(express.json({ limit: "50kb" }));
-
-// ============================================================
-// PATH CONFIGURATION
-// ============================================================
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const questionsFile = path.join(
-    __dirname,
-    "data",
-    "questions.json"
-);
+const app = express();
 
-const usersFile = path.join(
-    __dirname,
-    "data",
-    "users.json"
-);
+app.use(cors());
+app.use(express.json());
 
-// ============================================================
-// GEMINI CONFIGURATION
-// ============================================================
+const PORT = process.env.PORT || 10000;
+
+// =====================================================
+// FILES
+// =====================================================
+
+const dataDirectory = path.join(__dirname, "data");
+
+const questionsFile =
+    path.join(dataDirectory, "questions.json");
+
+const usersFile =
+    path.join(dataDirectory, "users.json");
+
+if (!fs.existsSync(dataDirectory)) {
+    fs.mkdirSync(dataDirectory, {
+        recursive: true
+    });
+}
+
+if (!fs.existsSync(usersFile)) {
+    fs.writeFileSync(
+        usersFile,
+        JSON.stringify(
+            {
+                users: []
+            },
+            null,
+            2
+        )
+    );
+}
+
+// =====================================================
+// GEMINI
+// =====================================================
 
 const GEMINI_API_KEY =
     process.env.GEMINI_API_KEY;
@@ -42,72 +59,72 @@ const GEMINI_MODEL =
     process.env.GEMINI_MODEL ||
     "gemini-3.5-flash-lite";
 
-let ai = null;
+let gemini = null;
 
 if (GEMINI_API_KEY) {
 
-    ai = new GoogleGenAI({
-        apiKey: GEMINI_API_KEY
-    });
+    gemini =
+        new GoogleGenAI({
+            apiKey: GEMINI_API_KEY
+        });
 
-    console.log("Gemini API key detected.");
+}
+
+// =====================================================
+// EMAIL / SMTP
+// =====================================================
+
+const SMTP_EMAIL =
+    process.env.SMTP_EMAIL;
+
+const SMTP_APP_PASSWORD =
+    process.env.SMTP_APP_PASSWORD;
+
+let mailTransporter = null;
+
+if (
+    SMTP_EMAIL &&
+    SMTP_APP_PASSWORD
+) {
+
+    mailTransporter =
+        nodemailer.createTransport({
+            service: "gmail",
+            auth: {
+                user: SMTP_EMAIL,
+                pass: SMTP_APP_PASSWORD
+            }
+        });
+
+    console.log(
+        "SMTP email service configured."
+    );
 
 } else {
 
     console.log(
-        "WARNING: GEMINI_API_KEY is missing."
+        "SMTP email service is not configured."
     );
+
 }
 
-// ============================================================
-// HOME / SERVER STATUS
-// ============================================================
+// =====================================================
+// CONSTANTS
+// =====================================================
 
-app.get("/", (req, res) => {
+const OTP_EXPIRY_MS =
+    10 * 60 * 1000;
 
-    res.json({
+const RESET_VERIFIED_EXPIRY_MS =
+    10 * 60 * 1000;
 
-        message:
-            "Study Buddy AI Backend is running!",
-
-        ai:
-            GEMINI_API_KEY
-                ? "Gemini configured"
-                : "Gemini API key missing",
-
-        quiz:
-            "Quiz API configured",
-
-        auth:
-            "Authentication API configured"
-
-    });
-
-});
-
-// ============================================================
-// USER AUTHENTICATION HELPER FUNCTIONS
-// ============================================================
+// =====================================================
+// USER HELPERS
+// =====================================================
 
 function loadUsers() {
 
     try {
-
-        if (!fs.existsSync(usersFile)) {
-
-            fs.writeFileSync(
-                usersFile,
-                JSON.stringify(
-                    {
-                        users: []
-                    },
-                    null,
-                    2
-                )
-            );
-
-            return [];
-        }
 
         const data =
             fs.readFileSync(
@@ -115,207 +132,147 @@ function loadUsers() {
                 "utf8"
             );
 
-        if (!data.trim()) {
-
-            return [];
-        }
-
         const parsed =
             JSON.parse(data);
 
-        // Support:
-        // { "users": [] }
-
         if (
-            parsed &&
-            Array.isArray(parsed.users)
+            !parsed.users ||
+            !Array.isArray(parsed.users)
         ) {
 
-            return parsed.users;
+            return [];
+
         }
 
-        // Also support:
-        // [ ... ]
-
-        if (
-            Array.isArray(parsed)
-        ) {
-
-            return parsed;
-        }
-
-        console.error(
-            "users.json must contain a users array."
-        );
-
-        return [];
+        return parsed.users;
 
     } catch (error) {
 
         console.error(
-            "Unable to load users.json:",
-            error.message
+            "Unable to load users:",
+            error
         );
 
         return [];
     }
 }
-
-
-// ============================================================
-// SAVE USERS
-// ============================================================
 
 function saveUsers(users) {
 
-    try {
-
-        fs.writeFileSync(
-
-            usersFile,
-
-            JSON.stringify(
-                {
-                    users: users
-                },
-                null,
-                2
-            )
-
-        );
-
-        return true;
-
-    } catch (error) {
-
-        console.error(
-            "Unable to save users.json:",
-            error.message
-        );
-
-        return false;
-    }
+    fs.writeFileSync(
+        usersFile,
+        JSON.stringify(
+            {
+                users
+            },
+            null,
+            2
+        )
+    );
 }
-
-
-// ============================================================
-// NORMALIZE EMAIL
-// ============================================================
 
 function normalizeEmail(email) {
 
-    return String(
-        email || ""
-    )
+    return String(email || "")
         .trim()
         .toLowerCase();
 }
 
+// =====================================================
+// PASSWORD HASHING
+// =====================================================
 
-// ============================================================
-// HASH PASSWORD
-// ============================================================
+function hashPassword(password) {
 
-function hashPassword(
-    password,
-    salt = null
-) {
+    return new Promise(
+        (resolve, reject) => {
 
-    const passwordSalt =
-        salt ||
-        crypto.randomBytes(16).toString("hex");
+            const salt =
+                crypto
+                    .randomBytes(16)
+                    .toString("hex");
 
-    const hash =
-        crypto
-            .scryptSync(
+            crypto.scrypt(
                 password,
-                passwordSalt,
-                64
-            )
-            .toString("hex");
+                salt,
+                64,
+                (
+                    error,
+                    derivedKey
+                ) => {
 
-    return {
+                    if (error) {
 
-        salt:
-            passwordSalt,
+                        reject(error);
 
-        hash:
-            hash
+                        return;
+                    }
 
-    };
+                    resolve({
+                        hash:
+                            derivedKey.toString(
+                                "hex"
+                            ),
+
+                        salt
+                    });
+                }
+            );
+        }
+    );
 }
-
-
-// ============================================================
-// VERIFY PASSWORD
-// ============================================================
 
 function verifyPassword(
     password,
-    salt,
-    storedHash
+    storedHash,
+    storedSalt
 ) {
 
-    try {
+    return new Promise(
+        (resolve, reject) => {
 
-        if (
-            !password ||
-            !salt ||
-            !storedHash
-        ) {
+            crypto.scrypt(
+                password,
+                storedSalt,
+                64,
+                (
+                    error,
+                    derivedKey
+                ) => {
 
-            return false;
-        }
+                    if (error) {
 
-        const hash =
-            crypto
-                .scryptSync(
-                    password,
-                    salt,
-                    64
-                )
-                .toString("hex");
+                        reject(error);
 
-        const hashBuffer =
-            Buffer.from(
-                hash,
-                "hex"
+                        return;
+                    }
+
+                    const derivedHash =
+                        derivedKey.toString(
+                            "hex"
+                        );
+
+                    resolve(
+                        crypto.timingSafeEqual(
+                            Buffer.from(
+                                derivedHash,
+                                "hex"
+                            ),
+                            Buffer.from(
+                                storedHash,
+                                "hex"
+                            )
+                        )
+                    );
+                }
             );
-
-        const storedBuffer =
-            Buffer.from(
-                storedHash,
-                "hex"
-            );
-
-        if (
-            hashBuffer.length !==
-            storedBuffer.length
-        ) {
-
-            return false;
         }
-
-        return crypto.timingSafeEqual(
-            hashBuffer,
-            storedBuffer
-        );
-
-    } catch (error) {
-
-        console.error(
-            "Password verification error:",
-            error.message
-        );
-
-        return false;
-    }
+    );
 }
 
-
-// ============================================================
-// CREATE AUTH TOKEN
-// ============================================================
+// =====================================================
+// TOKEN
+// =====================================================
 
 function createAuthToken() {
 
@@ -324,21 +281,19 @@ function createAuthToken() {
         .toString("hex");
 }
 
-
-// ============================================================
-// GET AUTH TOKEN FROM REQUEST
-// ============================================================
-
 function getTokenFromRequest(req) {
 
     const authorization =
-        req.headers.authorization ||
-        "";
+        req.headers.authorization;
+
+    if (!authorization) {
+
+        return null;
+    }
 
     if (
-        !authorization.startsWith(
-            "Bearer "
-        )
+        !authorization
+            .startsWith("Bearer ")
     ) {
 
         return null;
@@ -348,11 +303,6 @@ function getTokenFromRequest(req) {
         .substring(7)
         .trim();
 }
-
-
-// ============================================================
-// GET USER FROM AUTH TOKEN
-// ============================================================
 
 function getUserFromRequest(req) {
 
@@ -367,121 +317,214 @@ function getUserFromRequest(req) {
     const users =
         loadUsers();
 
-    return users.find(
-        user =>
-            user.authToken === token
-    ) || null;
+    return (
+        users.find(
+            user =>
+                user.authToken === token
+        ) || null
+    );
 }
 
+// =====================================================
+// OTP HELPERS
+// =====================================================
 
-// ============================================================
-// AUTH - SIGN UP
-// ============================================================
+function generateOTP() {
+
+    return Math.floor(
+        100000 +
+        Math.random() * 900000
+    ).toString();
+}
+
+function hashOTP(otp) {
+
+    return crypto
+        .createHash("sha256")
+        .update(otp)
+        .digest("hex");
+}
+
+// =====================================================
+// EMAIL OTP
+// =====================================================
+
+async function sendPasswordResetOTP(
+    email,
+    otp
+) {
+
+    if (!mailTransporter) {
+
+        throw new Error(
+            "Email service is not configured."
+        );
+    }
+
+    await mailTransporter.sendMail({
+
+        from:
+            `"Study Buddy AI" <${SMTP_EMAIL}>`,
+
+        to: email,
+
+        subject:
+            "Study Buddy AI - Password Reset OTP",
+
+        text:
+            `Your Study Buddy AI password reset OTP is ${otp}.\n\n` +
+            `This OTP is valid for 10 minutes.\n\n` +
+            `If you did not request a password reset, please ignore this email.`,
+
+        html: `
+            <div style="
+                font-family: Arial, sans-serif;
+                max-width: 600px;
+                margin: auto;
+                padding: 20px;
+            ">
+
+                <h2>
+                    Study Buddy AI
+                </h2>
+
+                <p>
+                    We received a request to reset
+                    your password.
+                </p>
+
+                <p>
+                    Your password reset OTP is:
+                </p>
+
+                <div style="
+                    font-size: 32px;
+                    font-weight: bold;
+                    letter-spacing: 8px;
+                    padding: 20px;
+                    text-align: center;
+                    background: #F6F7FB;
+                ">
+                    ${otp}
+                </div>
+
+                <p>
+                    This OTP is valid for
+                    <strong>10 minutes</strong>.
+                </p>
+
+                <p>
+                    If you did not request a password
+                    reset, you can safely ignore this email.
+                </p>
+
+                <p>
+                    Regards,<br>
+                    Study Buddy AI
+                </p>
+
+            </div>
+        `
+    });
+}
+
+// =====================================================
+// HOME
+// =====================================================
+
+app.get(
+    "/",
+    (req, res) => {
+
+        res.json({
+
+            message:
+                "Study Buddy AI Backend is running!",
+
+            ai:
+                gemini
+                    ? "Gemini configured"
+                    : "Gemini not configured",
+
+            auth:
+                "Authentication API configured",
+
+            passwordReset:
+                mailTransporter
+                    ? "Email OTP configured"
+                    : "Email OTP not configured"
+        });
+    }
+);
+
+// =====================================================
+// SIGN UP
+// =====================================================
 
 app.post(
     "/api/auth/signup",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            console.log(
-                "Signup request received."
-            );
-
             const name =
                 String(
-                    req.body?.name || ""
+                    req.body.name || ""
                 ).trim();
 
             const email =
                 normalizeEmail(
-                    req.body?.email
+                    req.body.email
                 );
 
             const password =
                 String(
-                    req.body?.password || ""
+                    req.body.password || ""
                 );
 
             const confirmPassword =
                 String(
-                    req.body?.confirmPassword || ""
+                    req.body.confirmPassword || ""
                 );
-
-            // ------------------------------------------------
-            // VALIDATE NAME
-            // ------------------------------------------------
 
             if (!name) {
 
                 return res.status(400).json({
-
                     success: false,
-
-                    error:
-                        "Name is required."
-
+                    message:
+                        "Please enter your name."
                 });
             }
-
-            // ------------------------------------------------
-            // VALIDATE EMAIL
-            // ------------------------------------------------
 
             if (!email) {
 
                 return res.status(400).json({
-
                     success: false,
-
-                    error:
-                        "Email is required."
-
+                    message:
+                        "Please enter your email."
                 });
             }
-
-            // ------------------------------------------------
-            // VALIDATE EMAIL FORMAT
-            // ------------------------------------------------
 
             const emailRegex =
                 /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-            if (
-                !emailRegex.test(email)
-            ) {
+            if (!emailRegex.test(email)) {
 
                 return res.status(400).json({
-
                     success: false,
-
-                    error:
-                        "Please enter a valid email address."
-
+                    message:
+                        "Enter a valid email."
                 });
             }
 
-            // ------------------------------------------------
-            // VALIDATE PASSWORD
-            // ------------------------------------------------
-
-            if (
-                password.length < 6
-            ) {
+            if (password.length < 6) {
 
                 return res.status(400).json({
-
                     success: false,
-
-                    error:
-                        "Password must be at least 6 characters."
-
+                    message:
+                        "Password must contain at least 6 characters."
                 });
             }
-
-            // ------------------------------------------------
-            // VALIDATE CONFIRM PASSWORD
-            // ------------------------------------------------
 
             if (
                 password !==
@@ -489,25 +532,14 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
-                    error:
+                    message:
                         "Passwords do not match."
-
                 });
             }
 
-            // ------------------------------------------------
-            // LOAD USERS
-            // ------------------------------------------------
-
             const users =
                 loadUsers();
-
-            // ------------------------------------------------
-            // CHECK DUPLICATE EMAIL
-            // ------------------------------------------------
 
             const existingUser =
                 users.find(
@@ -520,38 +552,26 @@ app.post(
             if (existingUser) {
 
                 return res.status(409).json({
-
                     success: false,
-
-                    error:
-                        "An account already exists with this email."
-
+                    message:
+                        "Account already exists. Please Sign In."
                 });
             }
 
-            // ------------------------------------------------
-            // HASH PASSWORD
-            // ------------------------------------------------
-
             const passwordData =
-                hashPassword(
+                await hashPassword(
                     password
                 );
-
-            // ------------------------------------------------
-            // CREATE USER
-            // ------------------------------------------------
 
             const newUser = {
 
                 id:
-                    crypto.randomUUID(),
+                    crypto
+                        .randomUUID(),
 
-                name:
-                    name,
+                name,
 
-                email:
-                    email,
+                email,
 
                 passwordHash:
                     passwordData.hash,
@@ -562,48 +582,24 @@ app.post(
                 authToken:
                     null,
 
+                resetOtpHash:
+                    null,
+
+                resetOtpExpiresAt:
+                    null,
+
+                resetOtpVerifiedUntil:
+                    null,
+
                 createdAt:
                     new Date().toISOString()
-
             };
-
-            // ------------------------------------------------
-            // ADD USER
-            // ------------------------------------------------
 
             users.push(
                 newUser
             );
 
-            // ------------------------------------------------
-            // SAVE USER
-            // ------------------------------------------------
-
-            const saved =
-                saveUsers(
-                    users
-                );
-
-            if (!saved) {
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        "Unable to create account."
-
-                });
-            }
-
-            console.log(
-                "New user registered:",
-                email
-            );
-
-            // ------------------------------------------------
-            // RESPONSE
-            // ------------------------------------------------
+            saveUsers(users);
 
             return res.status(201).json({
 
@@ -611,7 +607,6 @@ app.post(
 
                 message:
                     "Account created successfully."
-
             });
 
         } catch (error) {
@@ -625,103 +620,71 @@ app.post(
 
                 success: false,
 
-                error:
-                    "Something went wrong while creating the account."
-
+                message:
+                    "Unable to create account."
             });
         }
     }
 );
 
-
-// ============================================================
-// AUTH - SIGN IN
-// ============================================================
+// =====================================================
+// SIGN IN
+// =====================================================
 
 app.post(
     "/api/auth/signin",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            console.log(
-                "Signin request received."
-            );
-
             const email =
                 normalizeEmail(
-                    req.body?.email
+                    req.body.email
                 );
 
             const password =
                 String(
-                    req.body?.password || ""
+                    req.body.password || ""
                 );
 
-            // ------------------------------------------------
-            // VALIDATE INPUT
-            // ------------------------------------------------
-
-            if (
-                !email ||
-                !password
-            ) {
+            if (!email || !password) {
 
                 return res.status(400).json({
 
                     success: false,
 
-                    error:
+                    message:
                         "Email and password are required."
-
                 });
             }
-
-            // ------------------------------------------------
-            // LOAD USERS
-            // ------------------------------------------------
 
             const users =
                 loadUsers();
 
-            // ------------------------------------------------
-            // FIND USER
-            // ------------------------------------------------
-
-            const userIndex =
-                users.findIndex(
-                    user =>
+            const user =
+                users.find(
+                    item =>
                         normalizeEmail(
-                            user.email
+                            item.email
                         ) === email
                 );
 
-            if (
-                userIndex === -1
-            ) {
+            if (!user) {
 
                 return res.status(401).json({
 
                     success: false,
 
-                    error:
-                        "Invalid email or password."
-
+                    message:
+                        "Incorrect email or password"
                 });
             }
 
-            const user =
-                users[userIndex];
-
-            // ------------------------------------------------
-            // VERIFY PASSWORD
-            // ------------------------------------------------
-
             const passwordCorrect =
-                verifyPassword(
+                await verifyPassword(
                     password,
-                    user.passwordSalt,
-                    user.passwordHash
+                    user.passwordHash,
+                    user.passwordSalt
                 );
 
             if (!passwordCorrect) {
@@ -730,51 +693,18 @@ app.post(
 
                     success: false,
 
-                    error:
-                        "Invalid email or password."
-
+                    message:
+                        "Incorrect email or password"
                 });
             }
 
-            // ------------------------------------------------
-            // CREATE AUTH TOKEN
-            // ------------------------------------------------
-
-            const authToken =
+            const token =
                 createAuthToken();
 
-            // ------------------------------------------------
-            // SAVE AUTH TOKEN
-            // ------------------------------------------------
+            user.authToken =
+                token;
 
-            users[userIndex].authToken =
-                authToken;
-
-            const saved =
-                saveUsers(
-                    users
-                );
-
-            if (!saved) {
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        "Unable to create authentication session."
-
-                });
-            }
-
-            console.log(
-                "User signed in:",
-                email
-            );
-
-            // ------------------------------------------------
-            // RESPONSE
-            // ------------------------------------------------
+            saveUsers(users);
 
             return res.json({
 
@@ -783,22 +713,16 @@ app.post(
                 message:
                     "Sign in successful.",
 
-                token:
-                    authToken,
+                token,
 
                 user: {
 
-                    id:
-                        user.id,
+                    id: user.id,
 
-                    name:
-                        user.name,
+                    name: user.name,
 
-                    email:
-                        user.email
-
+                    email: user.email
                 }
-
             });
 
         } catch (error) {
@@ -812,143 +736,211 @@ app.post(
 
                 success: false,
 
-                error:
-                    "Something went wrong while signing in."
-
+                message:
+                    "Unable to sign in."
             });
         }
     }
 );
 
-
-// ============================================================
-// AUTH - GET CURRENT USER
-// ============================================================
+// =====================================================
+// GET CURRENT USER
+// =====================================================
 
 app.get(
     "/api/auth/me",
     (req, res) => {
 
-        try {
+        const user =
+            getUserFromRequest(req);
 
-            const user =
-                getUserFromRequest(
-                    req
-                );
+        if (!user) {
 
-            if (!user) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "Invalid or expired authentication token."
-
-                });
-            }
-
-            return res.json({
-
-                success: true,
-
-                user: {
-
-                    id:
-                        user.id,
-
-                    name:
-                        user.name,
-
-                    email:
-                        user.email
-
-                }
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Auth me error:",
-                error
-            );
-
-            return res.status(500).json({
+            return res.status(401).json({
 
                 success: false,
 
-                error:
-                    "Unable to verify authentication."
-
+                message:
+                    "Invalid or expired authentication token."
             });
         }
+
+        return res.json({
+
+            success: true,
+
+            user: {
+
+                id: user.id,
+
+                name: user.name,
+
+                email: user.email
+            }
+        });
     }
 );
 
-
-// ============================================================
-// AUTH - LOGOUT
-// ============================================================
+// =====================================================
+// LOGOUT
+// =====================================================
 
 app.post(
     "/api/auth/logout",
     (req, res) => {
 
-        try {
+        const user =
+            getUserFromRequest(req);
 
-            const token =
-                getTokenFromRequest(
-                    req
+        if (user) {
+
+            const users =
+                loadUsers();
+
+            const storedUser =
+                users.find(
+                    item =>
+                        item.id === user.id
                 );
 
-            if (!token) {
+            if (storedUser) {
 
-                return res.json({
+                storedUser.authToken =
+                    null;
 
-                    success: true,
+                saveUsers(users);
+            }
+        }
+
+        return res.json({
+
+            success: true,
+
+            message:
+                "Logout successful."
+        });
+    }
+);
+
+// =====================================================
+// FORGOT PASSWORD - SEND OTP
+// =====================================================
+
+app.post(
+    "/api/auth/forgot-password",
+    async (req, res) => {
+
+        try {
+
+            const email =
+                normalizeEmail(
+                    req.body.email
+                );
+
+            if (!email) {
+
+                return res.status(400).json({
+
+                    success: false,
 
                     message:
-                        "Already logged out."
+                        "Please enter your email."
+                });
+            }
 
+            const emailRegex =
+                /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            if (!emailRegex.test(email)) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Enter a valid email."
+                });
+            }
+
+            /*
+             * Always return the same response
+             * whether the email exists or not.
+             */
+            const genericMessage =
+                "If an account exists with this email, a password reset OTP has been sent.";
+
+            if (!mailTransporter) {
+
+                console.error(
+                    "SMTP is not configured."
+                );
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    message:
+                        "Password reset email service is not configured."
                 });
             }
 
             const users =
                 loadUsers();
 
-            const userIndex =
-                users.findIndex(
-                    user =>
-                        user.authToken ===
-                        token
+            const user =
+                users.find(
+                    item =>
+                        normalizeEmail(
+                            item.email
+                        ) === email
                 );
 
-            if (
-                userIndex !== -1
-            ) {
+            if (!user) {
 
-                users[userIndex].authToken =
-                    null;
+                return res.json({
 
-                saveUsers(
-                    users
-                );
+                    success: true,
+
+                    message:
+                        genericMessage
+                });
             }
+
+            const otp =
+                generateOTP();
+
+            const otpHash =
+                hashOTP(otp);
+
+            user.resetOtpHash =
+                otpHash;
+
+            user.resetOtpExpiresAt =
+                Date.now() +
+                OTP_EXPIRY_MS;
+
+            user.resetOtpVerifiedUntil =
+                null;
+
+            saveUsers(users);
+
+            await sendPasswordResetOTP(
+                email,
+                otp
+            );
 
             return res.json({
 
                 success: true,
 
                 message:
-                    "Logged out successfully."
-
+                    genericMessage
             });
 
         } catch (error) {
 
             console.error(
-                "Logout error:",
+                "Forgot password error:",
                 error
             );
 
@@ -956,68 +948,314 @@ app.post(
 
                 success: false,
 
-                error:
-                    "Unable to logout."
-
+                message:
+                    "Unable to send password reset OTP. Please try again."
             });
         }
     }
 );
 
+// =====================================================
+// VERIFY RESET OTP
+// =====================================================
 
-// ============================================================
-// LOAD QUIZ QUESTIONS
-// ============================================================
+app.post(
+    "/api/auth/verify-reset-otp",
+    (req, res) => {
 
-function loadQuestions() {
+        try {
 
-    try {
+            const email =
+                normalizeEmail(
+                    req.body.email
+                );
 
-        if (!fs.existsSync(questionsFile)) {
+            const otp =
+                String(
+                    req.body.otp || ""
+                ).trim();
+
+            if (!email || !otp) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Email and OTP are required."
+                });
+            }
+
+            const users =
+                loadUsers();
+
+            const user =
+                users.find(
+                    item =>
+                        normalizeEmail(
+                            item.email
+                        ) === email
+                );
+
+            if (!user) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Invalid or expired OTP."
+                });
+            }
+
+            if (
+                !user.resetOtpHash ||
+                !user.resetOtpExpiresAt
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Invalid or expired OTP."
+                });
+            }
+
+            if (
+                Date.now() >
+                Number(
+                    user.resetOtpExpiresAt
+                )
+            ) {
+
+                user.resetOtpHash =
+                    null;
+
+                user.resetOtpExpiresAt =
+                    null;
+
+                user.resetOtpVerifiedUntil =
+                    null;
+
+                saveUsers(users);
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "OTP has expired. Please request a new OTP."
+                });
+            }
+
+            const enteredOtpHash =
+                hashOTP(otp);
+
+            if (
+                enteredOtpHash !==
+                user.resetOtpHash
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Invalid OTP. Please enter the correct OTP."
+                });
+            }
+
+            user.resetOtpVerifiedUntil =
+                Date.now() +
+                RESET_VERIFIED_EXPIRY_MS;
+
+            saveUsers(users);
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "OTP verified successfully."
+            });
+
+        } catch (error) {
 
             console.error(
-                "questions.json not found:",
-                questionsFile
+                "OTP verification error:",
+                error
             );
 
-            return [];
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Unable to verify OTP."
+            });
         }
-
-        const data =
-            fs.readFileSync(
-                questionsFile,
-                "utf8"
-            );
-
-        const questions =
-            JSON.parse(data);
-
-        if (!Array.isArray(questions)) {
-
-            console.error(
-                "questions.json must contain an array."
-            );
-
-            return [];
-        }
-
-        return questions;
-
-    } catch (error) {
-
-        console.error(
-            "Unable to load questions.json:",
-            error.message
-        );
-
-        return [];
     }
-}
+);
 
+// =====================================================
+// RESET PASSWORD
+// =====================================================
 
-// ============================================================
-// QUIZ - GET QUESTIONS
-// ============================================================
+app.post(
+    "/api/auth/reset-password",
+    async (req, res) => {
+
+        try {
+
+            const email =
+                normalizeEmail(
+                    req.body.email
+                );
+
+            const newPassword =
+                String(
+                    req.body.newPassword || ""
+                );
+
+            const confirmPassword =
+                String(
+                    req.body.confirmPassword || ""
+                );
+
+            if (!email) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Email is required."
+                });
+            }
+
+            if (
+                newPassword.length < 6
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Password must contain at least 6 characters."
+                });
+            }
+
+            if (
+                newPassword !==
+                confirmPassword
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Passwords do not match."
+                });
+            }
+
+            const users =
+                loadUsers();
+
+            const user =
+                users.find(
+                    item =>
+                        normalizeEmail(
+                            item.email
+                        ) === email
+                );
+
+            if (!user) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Unable to reset password."
+                });
+            }
+
+            if (
+                !user.resetOtpVerifiedUntil ||
+                Date.now() >
+                Number(
+                    user.resetOtpVerifiedUntil
+                )
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "OTP verification has expired. Please request a new OTP."
+                });
+            }
+
+            const passwordData =
+                await hashPassword(
+                    newPassword
+                );
+
+            user.passwordHash =
+                passwordData.hash;
+
+            user.passwordSalt =
+                passwordData.salt;
+
+            // Invalidate old login session
+            user.authToken =
+                null;
+
+            // Clear OTP
+            user.resetOtpHash =
+                null;
+
+            user.resetOtpExpiresAt =
+                null;
+
+            user.resetOtpVerifiedUntil =
+                null;
+
+            saveUsers(users);
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "Password reset successfully."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Reset password error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Unable to reset password."
+            });
+        }
+    }
+);
+
+// =====================================================
+// QUIZ QUESTIONS
+// =====================================================
 
 app.get(
     "/api/quiz/questions",
@@ -1027,206 +1265,97 @@ app.get(
 
             const subject =
                 String(
-                    req.query.subject ||
-                    "General"
+                    req.query.subject || ""
                 ).trim();
 
             const difficulty =
                 String(
-                    req.query.difficulty ||
-                    "All"
+                    req.query.difficulty || ""
                 ).trim();
 
-            let count =
+            const count =
                 parseInt(
-                    req.query.count ||
-                    "10",
+                    req.query.count || "10",
                     10
                 );
 
-            // ------------------------------------------------
-            // VALIDATE QUESTION COUNT
-            // ------------------------------------------------
-
-            if (isNaN(count)) {
-
-                count = 10;
-            }
-
-            count =
-                Math.max(
-                    1,
-                    Math.min(
-                        count,
-                        20
-                    )
+            const data =
+                fs.readFileSync(
+                    questionsFile,
+                    "utf8"
                 );
 
-            // ------------------------------------------------
-            // LOAD QUESTIONS
-            // ------------------------------------------------
-
             let questions =
-                loadQuestions();
+                JSON.parse(data);
 
-            if (
-                questions.length === 0
-            ) {
+            if (!Array.isArray(questions)) {
 
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        "No questions are available on the server."
-
-                });
+                questions =
+                    questions.questions || [];
             }
 
-            // ------------------------------------------------
-            // FILTER SUBJECT
-            // ------------------------------------------------
-
-            if (
-                subject &&
-                subject.toLowerCase() !==
-                    "general"
-            ) {
+            if (subject) {
 
                 questions =
                     questions.filter(
-                        question =>
+                        q =>
                             String(
-                                question.subject ||
-                                ""
-                            )
-                                .trim()
-                                .toLowerCase() ===
+                                q.subject || ""
+                            ).toLowerCase()
+                            ===
                             subject.toLowerCase()
                     );
             }
 
-            // ------------------------------------------------
-            // FILTER DIFFICULTY
-            // ------------------------------------------------
-
             if (
                 difficulty &&
                 difficulty.toLowerCase() !==
-                    "all"
+                "all"
             ) {
 
                 questions =
                     questions.filter(
-                        question =>
+                        q =>
                             String(
-                                question.difficulty ||
-                                ""
-                            )
-                                .trim()
-                                .toLowerCase() ===
+                                q.difficulty || ""
+                            ).toLowerCase()
+                            ===
                             difficulty.toLowerCase()
                     );
             }
 
-            // ------------------------------------------------
-            // RANDOMIZE
-            // ------------------------------------------------
-
             questions =
-                questions.sort(
-                    () =>
-                        Math.random() - 0.5
-                );
-
-            // ------------------------------------------------
-            // LIMIT QUESTION COUNT
-            // ------------------------------------------------
-
-            questions =
-                questions.slice(
-                    0,
-                    count
-                );
-
-            // ------------------------------------------------
-            // NO QUESTIONS FOUND
-            // ------------------------------------------------
-
-            if (
-                questions.length === 0
-            ) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    error:
-                        "No quiz questions found for the selected subject and difficulty."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // REMOVE ANSWERS
-            // ------------------------------------------------
+                questions
+                    .sort(
+                        () =>
+                            Math.random() - 0.5
+                    )
+                    .slice(
+                        0,
+                        Math.max(1, count)
+                    );
 
             const safeQuestions =
                 questions.map(
-                    question => ({
+                    q => {
 
-                        id:
-                            question.id,
+                        const {
+                            correctAnswer,
+                            solution,
+                            explanation,
+                            ...safeQuestion
+                        } = q;
 
-                        subject:
-                            question.subject ||
-                            "",
-
-                        topic:
-                            question.topic ||
-                            "",
-
-                        difficulty:
-                            question.difficulty ||
-                            "",
-
-                        question:
-                            question.question ||
-                            "",
-
-                        optionA:
-                            question.optionA ||
-                            "",
-
-                        optionB:
-                            question.optionB ||
-                            "",
-
-                        optionC:
-                            question.optionC ||
-                            "",
-
-                        optionD:
-                            question.optionD ||
-                            ""
-
-                    })
+                        return safeQuestion;
+                    }
                 );
-
-            // ------------------------------------------------
-            // RESPONSE
-            // ------------------------------------------------
 
             return res.json({
 
                 success: true,
 
-                count:
-                    safeQuestions.length,
-
                 questions:
                     safeQuestions
-
             });
 
         } catch (error) {
@@ -1240,18 +1369,16 @@ app.get(
 
                 success: false,
 
-                error:
+                message:
                     "Unable to load quiz questions."
-
             });
         }
     }
 );
 
-
-// ============================================================
-// QUIZ - SUBMIT ANSWER
-// ============================================================
+// =====================================================
+// QUIZ SUBMIT
+// =====================================================
 
 app.post(
     "/api/quiz/submit",
@@ -1259,339 +1386,115 @@ app.post(
 
         try {
 
-            // ------------------------------------------------
-            // LOG REQUEST
-            // ------------------------------------------------
-
-            console.log(
-                "Quiz submit request:",
-                JSON.stringify(req.body)
-            );
-
-            // ------------------------------------------------
-            // GET QUESTION ID
-            // ------------------------------------------------
-
-            const rawQuestionId =
-                req.body?.questionId ??
-                req.body?.id;
-
             const questionId =
-                Number(
-                    rawQuestionId
+                req.body.questionId ??
+                req.body.id;
+
+            const selectedAnswer =
+                req.body.selectedAnswer ??
+                req.body.answer ??
+                req.body.selectedOption;
+
+            const data =
+                fs.readFileSync(
+                    questionsFile,
+                    "utf8"
                 );
 
-            // ------------------------------------------------
-            // GET SELECTED ANSWER
-            // ------------------------------------------------
+            let questions =
+                JSON.parse(data);
 
-            let selectedAnswer =
-                String(
-                    req.body?.selectedAnswer ??
-                    req.body?.answer ??
-                    req.body?.selectedOption ??
-                    ""
-                ).trim();
+            if (!Array.isArray(questions)) {
 
-            // ------------------------------------------------
-            // VALIDATE QUESTION ID
-            // ------------------------------------------------
-
-            if (
-                !Number.isInteger(
-                    questionId
-                ) ||
-                questionId <= 0
-            ) {
-
-                console.log(
-                    "Invalid question ID:",
-                    rawQuestionId
-                );
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "Valid questionId is required."
-
-                });
+                questions =
+                    questions.questions || [];
             }
-
-            // ------------------------------------------------
-            // VALIDATE ANSWER
-            // ------------------------------------------------
-
-            if (!selectedAnswer) {
-
-                console.log(
-                    "Selected answer is missing."
-                );
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "Selected answer is required."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // LOAD QUESTIONS
-            // ------------------------------------------------
-
-            const questions =
-                loadQuestions();
-
-            if (
-                questions.length === 0
-            ) {
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        "Unable to load quiz questions."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // FIND QUESTION
-            // ------------------------------------------------
 
             const question =
                 questions.find(
-                    item =>
-                        Number(item.id) ===
-                        questionId
+                    q =>
+                        String(q.id) ===
+                        String(questionId)
                 );
 
             if (!question) {
-
-                console.log(
-                    "Question not found:",
-                    questionId
-                );
 
                 return res.status(404).json({
 
                     success: false,
 
-                    error:
+                    message:
                         "Question not found."
-
                 });
             }
 
-            // ------------------------------------------------
-            // NORMALIZE ANSWER
-            // ------------------------------------------------
-
-            const originalAnswer =
-                selectedAnswer;
-
-            selectedAnswer =
-                selectedAnswer
+            let normalizedAnswer =
+                String(
+                    selectedAnswer || ""
+                )
                     .trim()
                     .toUpperCase();
 
-            // ------------------------------------------------
-            // IF ANSWER IS A/B/C/D
-            // ------------------------------------------------
+            const optionMap = {
 
-            if (
-                [
-                    "A",
-                    "B",
-                    "C",
-                    "D"
-                ].includes(
-                    selectedAnswer
-                )
+                A:
+                    question.optionA,
+
+                B:
+                    question.optionB,
+
+                C:
+                    question.optionC,
+
+                D:
+                    question.optionD
+            };
+
+            for (
+                const letter of
+                Object.keys(optionMap)
             ) {
 
-                // Already valid.
-
-            } else {
-
-                // ------------------------------------------------
-                // CONVERT OPTION TEXT TO A/B/C/D
-                // ------------------------------------------------
-
-                const optionA =
-                    String(
-                        question.optionA ||
-                        ""
-                    )
-                        .trim()
-                        .toUpperCase();
-
-                const optionB =
-                    String(
-                        question.optionB ||
-                        ""
-                    )
-                        .trim()
-                        .toUpperCase();
-
-                const optionC =
-                    String(
-                        question.optionC ||
-                        ""
-                    )
-                        .trim()
-                        .toUpperCase();
-
-                const optionD =
-                    String(
-                        question.optionD ||
-                        ""
-                    )
-                        .trim()
-                        .toUpperCase();
-
                 if (
-                    selectedAnswer ===
-                    optionA
+                    String(
+                        optionMap[letter] || ""
+                    )
+                        .trim()
+                        .toUpperCase()
+                    ===
+                    normalizedAnswer
                 ) {
 
-                    selectedAnswer =
-                        "A";
+                    normalizedAnswer =
+                        letter;
 
-                } else if (
-                    selectedAnswer ===
-                    optionB
-                ) {
-
-                    selectedAnswer =
-                        "B";
-
-                } else if (
-                    selectedAnswer ===
-                    optionC
-                ) {
-
-                    selectedAnswer =
-                        "C";
-
-                } else if (
-                    selectedAnswer ===
-                    optionD
-                ) {
-
-                    selectedAnswer =
-                        "D";
-
-                } else {
-
-                    console.log(
-                        "Invalid selected answer:",
-                        originalAnswer
-                    );
-
-                    return res.status(400).json({
-
-                        success: false,
-
-                        error:
-                            "Selected answer must be A, B, C or D, or match one of the question options."
-
-                    });
+                    break;
                 }
             }
 
-            // ------------------------------------------------
-            // GET CORRECT ANSWER
-            // ------------------------------------------------
-
             const correctAnswer =
                 String(
-                    question.correctAnswer ||
-                    ""
+                    question.correctAnswer || ""
                 )
                     .trim()
                     .toUpperCase();
 
-            // ------------------------------------------------
-            // VALIDATE CORRECT ANSWER
-            // ------------------------------------------------
-
-            if (
-                ![
-                    "A",
-                    "B",
-                    "C",
-                    "D"
-                ].includes(
-                    correctAnswer
-                )
-            ) {
-
-                console.error(
-                    "Invalid correctAnswer in questions.json:",
-                    question.id,
-                    question.correctAnswer
-                );
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        "Invalid correct answer configured for this question."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // CHECK ANSWER
-            // ------------------------------------------------
-
-            const isCorrect =
-                selectedAnswer ===
+            const correct =
+                normalizedAnswer ===
                 correctAnswer;
-
-            // ------------------------------------------------
-            // LOG RESULT
-            // ------------------------------------------------
-
-            console.log(
-                `Question ${questionId}: Selected=${selectedAnswer}, Correct=${correctAnswer}, Result=${isCorrect}`
-            );
-
-            // ------------------------------------------------
-            // RETURN RESULT
-            // ------------------------------------------------
 
             return res.json({
 
                 success: true,
 
-                questionId:
-                    question.id,
+                correct,
 
-                selectedAnswer:
-                    selectedAnswer,
-
-                correct:
-                    isCorrect,
-
-                correctAnswer:
-                    correctAnswer,
+                correctAnswer,
 
                 solution:
                     question.solution ||
-                    "",
-
-                explanation:
                     question.explanation ||
                     ""
-
             });
 
         } catch (error) {
@@ -1605,62 +1508,16 @@ app.post(
 
                 success: false,
 
-                error:
-                    "Unable to check quiz answer."
-
+                message:
+                    "Unable to submit answer."
             });
         }
     }
 );
 
-
-// ============================================================
-// GEMINI - GENERATE ANSWER
-// ============================================================
-
-async function generateGeminiAnswer(
-    prompt
-) {
-
-    if (!ai) {
-
-        throw new Error(
-            "Gemini API key is not configured."
-        );
-    }
-
-    console.log(
-        "Sending request to Gemini..."
-    );
-
-    const response =
-        await ai.models.generateContent({
-
-            model:
-                GEMINI_MODEL,
-
-            contents:
-                prompt
-
-        });
-
-    const answer =
-        response.text?.trim();
-
-    if (!answer) {
-
-        throw new Error(
-            "Gemini returned an empty response."
-        );
-    }
-
-    return answer;
-}
-
-
-// ============================================================
-// AI TUTOR API
-// ============================================================
+// =====================================================
+// AI TUTOR
+// =====================================================
 
 app.post(
     "/api/ask",
@@ -1669,230 +1526,116 @@ app.post(
         try {
 
             const question =
-                req.body?.question?.trim();
+                String(
+                    req.body.question || ""
+                ).trim();
 
             const subject =
-                req.body?.subject?.trim() ||
-                "General";
-
-            // ------------------------------------------------
-            // VALIDATE QUESTION
-            // ------------------------------------------------
+                String(
+                    req.body.subject ||
+                    "General"
+                ).trim();
 
             if (!question) {
 
                 return res.status(400).json({
 
-                    error:
-                        "Question is required."
+                    success: false,
 
+                    message:
+                        "Please enter a question."
                 });
             }
 
-            // ------------------------------------------------
-            // CHECK GEMINI KEY
-            // ------------------------------------------------
-
-            if (!GEMINI_API_KEY) {
+            if (!gemini) {
 
                 return res.status(500).json({
 
-                    error:
-                        "Gemini API key is not configured on the server."
+                    success: false,
 
+                    message:
+                        "AI service is not configured."
                 });
             }
-
-            // ------------------------------------------------
-            // AI PROMPT
-            // ------------------------------------------------
 
             const prompt = `
 You are Study Buddy AI, an educational AI tutor.
 
-IMPORTANT:
-The student's selected subject is: ${subject}
+Subject:
+${subject}
 
-The student's question is:
-
+Student question:
 ${question}
 
-=================================================
-SUBJECT RULES
-=================================================
+Give a clear, accurate, student-friendly answer.
 
-You MUST answer according to the selected subject.
+Use simple explanations where possible.
 
-- If the selected subject is Mathematics, answer as a Mathematics tutor.
-- If the selected subject is Physics, answer as a Physics tutor.
-- If the selected subject is Chemistry, answer as a Chemistry tutor.
-- If the selected subject is Biology, answer as a Biology tutor.
-- If the selected subject is English, answer as an English tutor.
-- If the selected subject is General, answer generally.
+For calculations:
+- Show Formula
+- Show Steps
+- Show Answer
 
-=================================================
-IMPORTANT SUBJECT BEHAVIOR
-=================================================
+For science:
+- Explain important concepts clearly.
+- Use correct chemical formulas and mathematical notation.
 
-1. Never change the selected subject.
-2. Never say that the student is in another subject.
-3. Never mention unrelated subjects unless the student asks.
-4. Answer the exact question asked.
-5. For simple questions, keep the answer reasonably short.
-6. Explain difficult concepts step by step.
-7. For Mathematics, show formulas and calculations clearly.
-8. For Mathematics, use simple numerical examples when useful.
-9. For Biology and Chemistry, explain scientific concepts accurately.
-10. For Physics, explain formulas and physical concepts clearly.
-11. For English, explain grammar, vocabulary and writing clearly.
+Do not mention that you are an AI unless necessary.
+            `.trim();
 
-=================================================
-FORMATTING RULES
-=================================================
+            const response =
+                await gemini.models.generateContent({
 
-- Use simple headings when useful.
-- Put every heading on its own line.
-- Put every bullet point on its own line.
-- Use the bullet character "•".
-- Do NOT use Markdown symbols such as #, ##, ###, **, *, or ---.
-- Do NOT create unnecessary numbered sections.
-- Keep paragraphs short.
-- Do not repeat the question unnecessarily.
-- Do not mention the API, backend, server or Demo Mode.
+                    model:
+                        GEMINI_MODEL,
 
-=================================================
-EXAMPLE
-=================================================
-
-If the student asks:
-
-"Square Root"
-
-and the selected subject is Mathematics, provide a clear Mathematics explanation.
-
-=================================================
-FINAL INSTRUCTION
-=================================================
-
-Now answer the student's question.
-`;
-
-            // ------------------------------------------------
-            // GENERATE ANSWER
-            // ------------------------------------------------
+                    contents:
+                        prompt
+                });
 
             const answer =
-                await generateGeminiAnswer(
-                    prompt
-                );
+                response.text ||
+                "";
+
+            if (!answer) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    message:
+                        "AI returned an empty response."
+                });
+            }
 
             return res.json({
 
                 success: true,
 
-                answer:
-                    answer
-
+                answer
             });
 
         } catch (error) {
 
             console.error(
-                "AI Tutor error:",
+                "AI error:",
                 error
             );
 
-            const message =
-                error?.message || "";
-
-            // ------------------------------------------------
-            // QUOTA ERROR
-            // ------------------------------------------------
-
-            if (
-                message.includes("429") ||
-                message.includes(
-                    "RESOURCE_EXHAUSTED"
-                ) ||
-                message
-                    .toLowerCase()
-                    .includes("quota")
-            ) {
-
-                return res.status(429).json({
-
-                    error:
-                        "AI usage limit reached. Please try again later."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // SERVER BUSY
-            // ------------------------------------------------
-
-            if (
-                message.includes("503") ||
-                message.includes(
-                    "UNAVAILABLE"
-                ) ||
-                message
-                    .toLowerCase()
-                    .includes(
-                        "high demand"
-                    )
-            ) {
-
-                return res.status(503).json({
-
-                    error:
-                        "AI service is temporarily busy. Please try again."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // MODEL ERROR
-            // ------------------------------------------------
-
-            if (
-                message.includes("404") ||
-                message
-                    .toLowerCase()
-                    .includes(
-                        "not found"
-                    )
-            ) {
-
-                return res.status(500).json({
-
-                    error:
-                        "The configured Gemini model is unavailable. Please check GEMINI_MODEL in Render."
-
-                });
-            }
-
-            // ------------------------------------------------
-            // GENERAL ERROR
-            // ------------------------------------------------
-
             return res.status(500).json({
 
-                error:
-                    "Something went wrong while generating the AI response."
+                success: false,
 
+                message:
+                    "Unable to get AI response."
             });
         }
     }
 );
 
-
-// ============================================================
+// =====================================================
 // START SERVER
-// ============================================================
-
-const PORT =
-    process.env.PORT || 3000;
+// =====================================================
 
 app.listen(
     PORT,
@@ -1903,10 +1646,6 @@ app.listen(
         );
 
         console.log(
-            `Quiz questions file: ${questionsFile}`
-        );
-
-        console.log(
             `Users file: ${usersFile}`
         );
 
@@ -1914,17 +1653,12 @@ app.listen(
             `Gemini model: ${GEMINI_MODEL}`
         );
 
-        if (GEMINI_API_KEY) {
-
-            console.log(
-                "Gemini API key detected."
-            );
-
-        } else {
-
-            console.log(
-                "WARNING: GEMINI_API_KEY is missing."
-            );
-        }
+        console.log(
+            `Password reset email: ${
+                mailTransporter
+                    ? "configured"
+                    : "not configured"
+            }`
+        );
     }
 );
