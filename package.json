@@ -1,14 +1,18 @@
 {
   "name": "study-buddy-ai-server",
   "version": "1.0.0",
+  "description": "Study Buddy AI Backend",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@google/genai": "^1.0.0",
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
+    "@google/genai": "2.27.0",
+    "cors": "2.8.5",
+    "express": "4.21.2"
   }
 }
