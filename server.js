@@ -23,59 +23,47 @@ app.use(
     })
 );
 
-const PORT =
-    process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000;
 
 // ======================================================
 // DATA FILES
 // ======================================================
 
-const DATA_DIR =
-    path.join(
-        __dirname,
-        "data"
-    );
+const DATA_DIR = path.join(
+    __dirname,
+    "data"
+);
 
-const USERS_FILE =
-    path.join(
-        DATA_DIR,
-        "users.json"
-    );
+const USERS_FILE = path.join(
+    DATA_DIR,
+    "users.json"
+);
 
-const QUESTIONS_FILE =
-    path.join(
-        DATA_DIR,
-        "questions.json"
-    );
+const QUESTIONS_FILE = path.join(
+    DATA_DIR,
+    "questions.json"
+);
 
-const QUIZ_RESULTS_FILE =
-    path.join(
-        DATA_DIR,
-        "quiz-results.json"
-    );
+const QUIZ_RESULTS_FILE = path.join(
+    DATA_DIR,
+    "quiz-results.json"
+);
 
 // ======================================================
 // CREATE DATA DIRECTORY / FILES
 // ======================================================
 
-if (
-    !fs.existsSync(DATA_DIR)
-) {
-    fs.mkdirSync(
-        DATA_DIR,
-        {
-            recursive: true
-        }
-    );
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, {
+        recursive: true
+    });
 }
 
 function ensureFile(
     filePath,
     defaultValue
 ) {
-    if (
-        !fs.existsSync(filePath)
-    ) {
+    if (!fs.existsSync(filePath)) {
         fs.writeFileSync(
             filePath,
             JSON.stringify(
@@ -113,9 +101,7 @@ function readJson(
 ) {
     try {
 
-        if (
-            !fs.existsSync(filePath)
-        ) {
+        if (!fs.existsSync(filePath)) {
             return fallback;
         }
 
@@ -144,7 +130,6 @@ function readJson(
     }
 }
 
-
 function writeJson(
     filePath,
     data
@@ -172,24 +157,19 @@ function loadUsers() {
             []
         );
 
-    if (
-        Array.isArray(data)
-    ) {
+    if (Array.isArray(data)) {
         return data;
     }
 
     if (
         data &&
-        Array.isArray(
-            data.users
-        )
+        Array.isArray(data.users)
     ) {
         return data.users;
     }
 
     return [];
 }
-
 
 function saveUsers(
     users
@@ -212,24 +192,19 @@ function loadQuizResults() {
             []
         );
 
-    if (
-        Array.isArray(data)
-    ) {
+    if (Array.isArray(data)) {
         return data;
     }
 
     if (
         data &&
-        Array.isArray(
-            data.results
-        )
+        Array.isArray(data.results)
     ) {
         return data.results;
     }
 
     return [];
 }
-
 
 function saveQuizResults(
     results
@@ -252,17 +227,13 @@ function loadQuestions() {
             []
         );
 
-    if (
-        Array.isArray(data)
-    ) {
+    if (Array.isArray(data)) {
         return data;
     }
 
     if (
         data &&
-        Array.isArray(
-            data.questions
-        )
+        Array.isArray(data.questions)
     ) {
         return data.questions;
     }
@@ -283,9 +254,7 @@ const GEMINI_MODEL =
 
 let gemini = null;
 
-if (
-    GEMINI_API_KEY
-) {
+if (GEMINI_API_KEY) {
 
     gemini =
         new GoogleGenAI({
@@ -320,9 +289,7 @@ const resendConfigured =
         RESEND_API_KEY
     );
 
-if (
-    resendConfigured
-) {
+if (resendConfigured) {
 
     console.log(
         "Resend email service configured."
@@ -351,9 +318,9 @@ const RESET_VERIFIED_EXPIRY_MS =
 
 function hashPassword(
     password,
-    salt = crypto.randomBytes(
-        16
-    ).toString("hex")
+    salt = crypto
+        .randomBytes(16)
+        .toString("hex")
 ) {
 
     const passwordHash =
@@ -371,7 +338,6 @@ function hashPassword(
             salt
     };
 }
-
 
 function verifyPassword(
     password,
@@ -401,9 +367,7 @@ function verifyPassword(
             )
         );
 
-    } catch (
-        error
-    ) {
+    } catch (error) {
 
         return false;
     }
@@ -416,9 +380,7 @@ function verifyPassword(
 function createAuthToken() {
 
     return crypto
-        .randomBytes(
-            32
-        )
+        .randomBytes(32)
         .toString("hex");
 }
 
@@ -430,20 +392,16 @@ function generateOtp() {
 
     return Math.floor(
         100000 +
-        Math.random() *
-        900000
+        Math.random() * 900000
     ).toString();
 }
-
 
 function hashOtp(
     otp
 ) {
 
     return crypto
-        .createHash(
-            "sha256"
-        )
+        .createHash("sha256")
         .update(otp)
         .digest("hex");
 }
@@ -457,9 +415,7 @@ async function sendPasswordResetOTP(
     otp
 ) {
 
-    if (
-        !RESEND_API_KEY
-    ) {
+    if (!RESEND_API_KEY) {
 
         throw new Error(
             "Resend email service is not configured."
@@ -470,12 +426,9 @@ async function sendPasswordResetOTP(
         await fetch(
             "https://api.resend.com/emails",
             {
-
-                method:
-                    "POST",
+                method: "POST",
 
                 headers: {
-
                     "Content-Type":
                         "application/json",
 
@@ -483,77 +436,73 @@ async function sendPasswordResetOTP(
                         `Bearer ${RESEND_API_KEY}`
                 },
 
-                body:
-                    JSON.stringify({
+                body: JSON.stringify({
+                    from:
+                        RESEND_FROM_EMAIL,
 
-                        from:
-                            RESEND_FROM_EMAIL,
+                    to: [
+                        email
+                    ],
 
-                        to: [
-                            email
-                        ],
+                    subject:
+                        "Study Buddy AI - Password Reset OTP",
 
-                        subject:
-                            "Study Buddy AI - Password Reset OTP",
+                    html: `
+                        <div style="
+                            font-family: Arial, sans-serif;
+                            max-width: 600px;
+                            margin: 0 auto;
+                            padding: 20px;
+                        ">
 
-                        html: `
+                            <h2>
+                                Study Buddy AI
+                            </h2>
+
+                            <p>
+                                We received a request
+                                to reset your password.
+                            </p>
+
+                            <p>
+                                Your password reset OTP is:
+                            </p>
+
                             <div style="
-                                font-family: Arial, sans-serif;
-                                max-width: 600px;
-                                margin: 0 auto;
-                                padding: 20px;
+                                font-size: 32px;
+                                font-weight: bold;
+                                letter-spacing: 8px;
+                                margin: 25px 0;
                             ">
-
-                                <h2>
-                                    Study Buddy AI
-                                </h2>
-
-                                <p>
-                                    We received a request
-                                    to reset your password.
-                                </p>
-
-                                <p>
-                                    Your password reset OTP is:
-                                </p>
-
-                                <div style="
-                                    font-size: 32px;
-                                    font-weight: bold;
-                                    letter-spacing: 8px;
-                                    margin: 25px 0;
-                                ">
-                                    ${otp}
-                                </div>
-
-                                <p>
-                                    This OTP is valid for
-                                    10 minutes.
-                                </p>
-
-                                <p>
-                                    If you did not request
-                                    a password reset, you can
-                                    safely ignore this email.
-                                </p>
-
-                                <p>
-                                    Regards,<br>
-                                    Study Buddy AI
-                                </p>
-
+                                ${otp}
                             </div>
-                        `
-                    })
+
+                            <p>
+                                This OTP is valid for
+                                10 minutes.
+                            </p>
+
+                            <p>
+                                If you did not request
+                                a password reset, you can
+                                safely ignore this email.
+                            </p>
+
+                            <p>
+                                Regards,<br>
+                                Study Buddy AI
+                            </p>
+
+                        </div>
+                    `
+                })
             }
         );
 
     const responseText =
         await response.text();
 
-    if (
-        !response.ok
-    ) {
+    if (!response.ok) {
 
         console.error(
             "Resend API error:",
@@ -596,9 +545,7 @@ function getTokenFromRequest(
 
     if (
         !header ||
-        !header.startsWith(
-            "Bearer "
-        )
+        !header.startsWith("Bearer ")
     ) {
         return null;
     }
@@ -607,7 +554,6 @@ function getTokenFromRequest(
         .substring(7)
         .trim();
 }
-
 
 function getAuthenticatedUser(
     req
@@ -662,23 +608,14 @@ function normalizeAnswer(
     const upper =
         answer.toUpperCase();
 
-    // ----------------------------------------------
-    // A / B / C / D
-    // ----------------------------------------------
-
     if (
         upper === "A" ||
         upper === "B" ||
         upper === "C" ||
         upper === "D"
     ) {
-
         return upper;
     }
-
-    // ----------------------------------------------
-    // optionA / optionB / optionC / optionD
-    // ----------------------------------------------
 
     const optionName =
         upper.replace(
@@ -686,37 +623,21 @@ function normalizeAnswer(
             ""
         );
 
-    if (
-        optionName ===
-        "OPTIONA"
-    ) {
+    if (optionName === "OPTIONA") {
         return "A";
     }
 
-    if (
-        optionName ===
-        "OPTIONB"
-    ) {
+    if (optionName === "OPTIONB") {
         return "B";
     }
 
-    if (
-        optionName ===
-        "OPTIONC"
-    ) {
+    if (optionName === "OPTIONC") {
         return "C";
     }
 
-    if (
-        optionName ===
-        "OPTIOND"
-    ) {
+    if (optionName === "OPTIOND") {
         return "D";
     }
-
-    // ----------------------------------------------
-    // Compare actual option text
-    // ----------------------------------------------
 
     const optionA =
         String(
@@ -773,7 +694,6 @@ function normalizeAnswer(
     return "";
 }
 
-
 function getCorrectAnswer(
     question
 ) {
@@ -797,7 +717,6 @@ function getCorrectAnswer(
     );
 }
 
-
 function getQuestionSolution(
     question
 ) {
@@ -815,7 +734,6 @@ function getQuestionSolution(
     ).trim();
 }
 
-
 function getOptionText(
     question,
     answer
@@ -829,32 +747,27 @@ function getOptionText(
     }
 
     switch (
-        String(answer)
-            .toUpperCase()
+        String(answer).toUpperCase()
     ) {
 
         case "A":
             return String(
-                question.optionA ||
-                ""
+                question.optionA || ""
             );
 
         case "B":
             return String(
-                question.optionB ||
-                ""
+                question.optionB || ""
             );
 
         case "C":
             return String(
-                question.optionC ||
-                ""
+                question.optionC || ""
             );
 
         case "D":
             return String(
-                question.optionD ||
-                ""
+                question.optionD || ""
             );
 
         default:
@@ -863,7 +776,7 @@ function getOptionText(
 }
 
 // ======================================================
-// HOME / HEALTH CHECK
+// HOME
 // ======================================================
 
 app.get(
@@ -934,9 +847,7 @@ app.post(
                 !confirmPassword
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -947,24 +858,16 @@ app.post(
             }
 
             const cleanName =
-                String(
-                    name
-                ).trim();
+                String(name).trim();
 
             const cleanEmail =
-                String(
-                    email
-                )
+                String(email)
                     .trim()
                     .toLowerCase();
 
-            if (
-                !cleanName
-            ) {
+            if (!cleanName) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -976,14 +879,10 @@ app.post(
 
             if (
                 !/^[^\s@]+@[^\s@]+\.[^\s@]+$/
-                    .test(
-                        cleanEmail
-                    )
+                    .test(cleanEmail)
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -994,14 +893,10 @@ app.post(
             }
 
             if (
-                String(
-                    password
-                ).length < 6
+                String(password).length < 6
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1016,9 +911,7 @@ app.post(
                 confirmPassword
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1036,21 +929,16 @@ app.post(
                     user =>
                         user &&
                         String(
-                            user.email ||
-                            ""
+                            user.email || ""
                         )
                             .trim()
                             .toLowerCase() ===
                         cleanEmail
                 );
 
-            if (
-                existingUser
-            ) {
+            if (existingUser) {
 
-                return res.status(
-                    409
-                ).json({
+                return res.status(409).json({
 
                     success:
                         false,
@@ -1113,9 +1001,7 @@ app.post(
                 `New user registered: ${cleanEmail}`
             );
 
-            return res.status(
-                201
-            ).json({
+            return res.status(201).json({
 
                 success:
                     true,
@@ -1136,18 +1022,14 @@ app.post(
                 }
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Signup error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1179,9 +1061,7 @@ app.post(
                 !password
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1192,9 +1072,7 @@ app.post(
             }
 
             const cleanEmail =
-                String(
-                    email
-                )
+                String(email)
                     .trim()
                     .toLowerCase();
 
@@ -1206,8 +1084,7 @@ app.post(
                     item =>
                         item &&
                         String(
-                            item.email ||
-                            ""
+                            item.email || ""
                         )
                             .trim()
                             .toLowerCase() ===
@@ -1216,9 +1093,7 @@ app.post(
 
             if (!user) {
 
-                return res.status(
-                    401
-                ).json({
+                return res.status(401).json({
 
                     success:
                         false,
@@ -1235,13 +1110,9 @@ app.post(
                     user.passwordSalt
                 );
 
-            if (
-                !validPassword
-            ) {
+            if (!validPassword) {
 
-                return res.status(
-                    401
-                ).json({
+                return res.status(401).json({
 
                     success:
                         false,
@@ -1284,18 +1155,14 @@ app.post(
                 }
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Signin error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1324,9 +1191,7 @@ app.get(
 
             if (!user) {
 
-                return res.status(
-                    401
-                ).json({
+                return res.status(401).json({
 
                     success:
                         false,
@@ -1354,18 +1219,14 @@ app.get(
                 }
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Auth me error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1425,18 +1286,14 @@ app.post(
                     "Signed out successfully."
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Logout error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1449,7 +1306,7 @@ app.post(
 );
 
 // ======================================================
-// FORGOT PASSWORD - SEND OTP
+// FORGOT PASSWORD
 // ======================================================
 
 app.post(
@@ -1464,9 +1321,7 @@ app.post(
 
             if (!email) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1477,9 +1332,7 @@ app.post(
             }
 
             const cleanEmail =
-                String(
-                    email
-                )
+                String(email)
                     .trim()
                     .toLowerCase();
 
@@ -1491,8 +1344,7 @@ app.post(
                     item =>
                         item &&
                         String(
-                            item.email ||
-                            ""
+                            item.email || ""
                         )
                             .trim()
                             .toLowerCase() ===
@@ -1501,9 +1353,7 @@ app.post(
 
             if (!user) {
 
-                return res.status(
-                    404
-                ).json({
+                return res.status(404).json({
 
                     success:
                         false,
@@ -1513,13 +1363,9 @@ app.post(
                 });
             }
 
-            if (
-                !resendConfigured
-            ) {
+            if (!resendConfigured) {
 
-                return res.status(
-                    500
-                ).json({
+                return res.status(500).json({
 
                     success:
                         false,
@@ -1533,9 +1379,7 @@ app.post(
                 generateOtp();
 
             const otpHash =
-                hashOtp(
-                    otp
-                );
+                hashOtp(otp);
 
             const expiresAt =
                 Date.now() +
@@ -1572,18 +1416,14 @@ app.post(
                     "OTP sent successfully."
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Forgot password error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1615,9 +1455,7 @@ app.post(
                 !otp
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1628,9 +1466,7 @@ app.post(
             }
 
             const cleanEmail =
-                String(
-                    email
-                )
+                String(email)
                     .trim()
                     .toLowerCase();
 
@@ -1642,8 +1478,7 @@ app.post(
                     item =>
                         item &&
                         String(
-                            item.email ||
-                            ""
+                            item.email || ""
                         )
                             .trim()
                             .toLowerCase() ===
@@ -1652,9 +1487,7 @@ app.post(
 
             if (!user) {
 
-                return res.status(
-                    404
-                ).json({
+                return res.status(404).json({
 
                     success:
                         false,
@@ -1669,9 +1502,7 @@ app.post(
                 !user.resetOtpExpiresAt
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1696,9 +1527,7 @@ app.post(
                     users
                 );
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1720,9 +1549,7 @@ app.post(
                 user.resetOtpHash
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1749,18 +1576,14 @@ app.post(
                     "OTP verified successfully."
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Verify OTP error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1794,9 +1617,7 @@ app.post(
                 !confirmPassword
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1812,9 +1633,7 @@ app.post(
                 ).length < 6
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1829,9 +1648,7 @@ app.post(
                 confirmPassword
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1842,9 +1659,7 @@ app.post(
             }
 
             const cleanEmail =
-                String(
-                    email
-                )
+                String(email)
                     .trim()
                     .toLowerCase();
 
@@ -1856,8 +1671,7 @@ app.post(
                     item =>
                         item &&
                         String(
-                            item.email ||
-                            ""
+                            item.email || ""
                         )
                             .trim()
                             .toLowerCase() ===
@@ -1866,9 +1680,7 @@ app.post(
 
             if (!user) {
 
-                return res.status(
-                    404
-                ).json({
+                return res.status(404).json({
 
                     success:
                         false,
@@ -1884,9 +1696,7 @@ app.post(
                 user.resetOtpVerifiedUntil
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -1939,18 +1749,14 @@ app.post(
                     "Password reset successfully."
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Reset password error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -1981,21 +1787,17 @@ app.get(
             let questions =
                 loadQuestions();
 
-            // --------------------------------------------------
+            // ==================================================
             // FILTER SUBJECT
-            // --------------------------------------------------
+            // ==================================================
 
             if (
                 subject &&
-                String(
-                    subject
-                ).trim()
+                String(subject).trim()
             ) {
 
                 const requestedSubject =
-                    String(
-                        subject
-                    )
+                    String(subject)
                         .trim()
                         .toLowerCase();
 
@@ -2019,21 +1821,24 @@ app.get(
                     );
             }
 
-            // --------------------------------------------------
+            // ==================================================
             // FILTER DIFFICULTY
-            // --------------------------------------------------
+            //
+            // IMPORTANT:
+            // "All" means ALL difficulty levels.
+            // Do NOT filter when difficulty = All.
+            // ==================================================
 
             if (
                 difficulty &&
-                String(
-                    difficulty
-                ).trim()
+                String(difficulty).trim() &&
+                String(difficulty)
+                    .trim()
+                    .toLowerCase() !== "all"
             ) {
 
                 const requestedDifficulty =
-                    String(
-                        difficulty
-                    )
+                    String(difficulty)
                         .trim()
                         .toLowerCase();
 
@@ -2057,9 +1862,9 @@ app.get(
                     );
             }
 
-            // --------------------------------------------------
-            // SHUFFLE
-            // --------------------------------------------------
+            // ==================================================
+            // SHUFFLE QUESTIONS
+            // ==================================================
 
             questions =
                 [...questions].sort(
@@ -2068,9 +1873,9 @@ app.get(
                         0.5
                 );
 
-            // --------------------------------------------------
-            // COUNT
-            // --------------------------------------------------
+            // ==================================================
+            // QUESTION COUNT
+            // ==================================================
 
             let requestedCount =
                 parseInt(
@@ -2095,20 +1900,20 @@ app.get(
                     requestedCount
                 );
 
-            // --------------------------------------------------
-            // REMOVE CORRECT ANSWER
+            // ==================================================
+            // REMOVE ANSWER DATA
             //
-            // The correct answer should remain on server.
-            // --------------------------------------------------
+            // Correct answer and solution should not be
+            // sent before the student answers.
+            // ==================================================
 
             const safeQuestions =
                 questions.map(
                     question => {
 
-                        const safeQuestion =
-                            {
-                                ...question
-                            };
+                        const safeQuestion = {
+                            ...question
+                        };
 
                         delete safeQuestion.correctAnswer;
                         delete safeQuestion.correct_answer;
@@ -2125,6 +1930,57 @@ app.get(
                     }
                 );
 
+            console.log(
+                "Quiz questions request:",
+                {
+                    subject:
+                        subject || "All",
+
+                    difficulty:
+                        difficulty || "All",
+
+                    requestedCount:
+                        requestedCount,
+
+                    returnedCount:
+                        safeQuestions.length
+                }
+            );
+
+            // ==================================================
+            // NO QUESTIONS FOUND
+            // ==================================================
+
+            if (
+                safeQuestions.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success:
+                        false,
+
+                    message:
+                        "No questions found.",
+
+                    subject:
+                        subject || "",
+
+                    difficulty:
+                        difficulty || "",
+
+                    count:
+                        0,
+
+                    questions:
+                        []
+                });
+            }
+
+            // ==================================================
+            // RESPONSE
+            // ==================================================
+
             return res.json({
 
                 success:
@@ -2137,18 +1993,14 @@ app.get(
                     safeQuestions
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Get quiz questions error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -2182,10 +2034,8 @@ app.post(
             // ==================================================
 
             if (
-                body.questionId !==
-                    undefined &&
-                body.selectedAnswer !==
-                    undefined
+                body.questionId !== undefined &&
+                body.selectedAnswer !== undefined
             ) {
 
                 const questionId =
@@ -2201,10 +2051,6 @@ app.post(
                 const questions =
                     loadQuestions();
 
-                // ----------------------------------------------
-                // FIND QUESTION
-                // ----------------------------------------------
-
                 const question =
                     questions.find(
                         item =>
@@ -2217,9 +2063,7 @@ app.post(
 
                 if (!question) {
 
-                    return res.status(
-                        404
-                    ).json({
+                    return res.status(404).json({
 
                         success:
                             false,
@@ -2229,49 +2073,27 @@ app.post(
                     });
                 }
 
-                // ----------------------------------------------
-                // NORMALIZE SELECTED ANSWER
-                // ----------------------------------------------
-
                 const normalizedSelectedAnswer =
                     normalizeAnswer(
                         selectedAnswer,
                         question
                     );
 
-                // ----------------------------------------------
-                // CORRECT ANSWER
-                // ----------------------------------------------
-
                 const correctAnswer =
                     getCorrectAnswer(
                         question
                     );
 
-                // ----------------------------------------------
-                // CHECK ANSWER
-                // ----------------------------------------------
-
                 const isCorrect =
-                    normalizedSelectedAnswer !==
-                        "" &&
-                    correctAnswer !==
-                        "" &&
+                    normalizedSelectedAnswer !== "" &&
+                    correctAnswer !== "" &&
                     normalizedSelectedAnswer ===
                         correctAnswer;
-
-                // ----------------------------------------------
-                // SOLUTION
-                // ----------------------------------------------
 
                 const solution =
                     getQuestionSolution(
                         question
                     );
-
-                // ----------------------------------------------
-                // OPTION TEXT
-                // ----------------------------------------------
 
                 const selectedOptionText =
                     getOptionText(
@@ -2358,9 +2180,9 @@ app.post(
             const answerDetails =
                 [];
 
-            // --------------------------------------------------
+            // ==================================================
             // CALCULATE ANSWERS
-            // --------------------------------------------------
+            // ==================================================
 
             if (
                 Array.isArray(
@@ -2371,23 +2193,18 @@ app.post(
                 submittedQuestions.forEach(
                     submittedQuestion => {
 
-                        if (
-                            !submittedQuestion
-                        ) {
+                        if (!submittedQuestion) {
                             return;
                         }
 
                         const questionId =
-                            submittedQuestion.id !==
-                                undefined
+                            submittedQuestion.id !== undefined
                                 ? String(
                                     submittedQuestion.id
                                 )
                                 : null;
 
-                        if (
-                            !questionId
-                        ) {
+                        if (!questionId) {
                             return;
                         }
 
@@ -2401,18 +2218,12 @@ app.post(
                                     questionId
                             );
 
-                        if (
-                            !serverQuestion
-                        ) {
+                        if (!serverQuestion) {
                             return;
                         }
 
                         let userAnswer =
                             "";
-
-                        // ------------------------------------------
-                        // FIND ANSWER
-                        // ------------------------------------------
 
                         if (
                             Array.isArray(
@@ -2442,9 +2253,7 @@ app.post(
                                     }
                                 );
 
-                            if (
-                                answerItem
-                            ) {
+                            if (answerItem) {
 
                                 userAnswer =
                                     answerItem.selectedAnswer ||
@@ -2452,10 +2261,6 @@ app.post(
                                     "";
                             }
                         }
-
-                        // ------------------------------------------
-                        // ALSO SUPPORT answers AS STRING ARRAY
-                        // ------------------------------------------
 
                         if (
                             !userAnswer &&
@@ -2471,16 +2276,12 @@ app.post(
 
                             if (
                                 index >= 0 &&
-                                typeof answers[
-                                    index
-                                ] ===
+                                typeof answers[index] ===
                                     "string"
                             ) {
 
                                 userAnswer =
-                                    answers[
-                                        index
-                                    ];
+                                    answers[index];
                             }
                         }
 
@@ -2496,17 +2297,12 @@ app.post(
                             );
 
                         const isCorrect =
-                            normalizedUserAnswer !==
-                                "" &&
-                            correctAnswer !==
-                                "" &&
+                            normalizedUserAnswer !== "" &&
+                            correctAnswer !== "" &&
                             normalizedUserAnswer ===
                                 correctAnswer;
 
-                        if (
-                            isCorrect
-                        ) {
-
+                        if (isCorrect) {
                             calculatedCorrectAnswers++;
                         }
 
@@ -2545,9 +2341,9 @@ app.post(
                 );
             }
 
-            // --------------------------------------------------
+            // ==================================================
             // FINAL CORRECT ANSWERS
-            // --------------------------------------------------
+            // ==================================================
 
             let finalCorrectAnswers =
                 calculatedCorrectAnswers;
@@ -2567,9 +2363,9 @@ app.post(
                     );
             }
 
-            // --------------------------------------------------
+            // ==================================================
             // TOTAL QUESTIONS
-            // --------------------------------------------------
+            // ==================================================
 
             const finalTotalQuestions =
                 Number(
@@ -2583,9 +2379,9 @@ app.post(
                         : 0
                 );
 
-            // --------------------------------------------------
+            // ==================================================
             // SCORE
-            // --------------------------------------------------
+            // ==================================================
 
             let finalScore =
                 Number(
@@ -2600,8 +2396,7 @@ app.post(
             ) {
 
                 if (
-                    finalTotalQuestions >
-                    0
+                    finalTotalQuestions > 0
                 ) {
 
                     finalScore =
@@ -2618,9 +2413,9 @@ app.post(
                 }
             }
 
-            // --------------------------------------------------
+            // ==================================================
             // SAVE RESULT
-            // --------------------------------------------------
+            // ==================================================
 
             const results =
                 loadQuizResults();
@@ -2631,16 +2426,13 @@ app.post(
                     crypto.randomUUID(),
 
                 userId:
-                    userId ||
-                    null,
+                    userId || null,
 
                 subject:
-                    subject ||
-                    "",
+                    subject || "",
 
                 difficulty:
-                    difficulty ||
-                    "",
+                    difficulty || "",
 
                 questions:
                     Array.isArray(
@@ -2658,9 +2450,7 @@ app.post(
 
                 score:
                     Number(
-                        finalScore.toFixed(
-                            2
-                        )
+                        finalScore.toFixed(2)
                     ),
 
                 totalQuestions:
@@ -2696,18 +2486,14 @@ app.post(
                 result
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Quiz submit error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -2720,7 +2506,7 @@ app.post(
 );
 
 // ======================================================
-// QUIZ - USER HISTORY
+// QUIZ HISTORY
 // ======================================================
 
 app.get(
@@ -2736,9 +2522,7 @@ app.get(
             let results =
                 loadQuizResults();
 
-            if (
-                userId
-            ) {
+            if (userId) {
 
                 results =
                     results.filter(
@@ -2753,8 +2537,7 @@ app.get(
             }
 
             results =
-                [...results]
-                    .reverse();
+                [...results].reverse();
 
             return res.json({
 
@@ -2765,18 +2548,14 @@ app.get(
                     results
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "Quiz history error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -2817,9 +2596,7 @@ app.post(
                 ).trim()
             ) {
 
-                return res.status(
-                    400
-                ).json({
+                return res.status(400).json({
 
                     success:
                         false,
@@ -2829,13 +2606,9 @@ app.post(
                 });
             }
 
-            if (
-                !gemini
-            ) {
+            if (!gemini) {
 
-                return res.status(
-                    500
-                ).json({
+                return res.status(500).json({
 
                     success:
                         false,
@@ -2889,18 +2662,14 @@ Instructions:
                     answer
             });
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.error(
                 "AI Tutor error:",
                 error
             );
 
-            return res.status(
-                500
-            ).json({
+            return res.status(500).json({
 
                 success:
                     false,
@@ -2919,9 +2688,7 @@ Instructions:
 app.use(
     (req, res) => {
 
-        res.status(
-            404
-        ).json({
+        res.status(404).json({
 
             success:
                 false,
@@ -2949,9 +2716,7 @@ app.use(
             error
         );
 
-        res.status(
-            500
-        ).json({
+        res.status(500).json({
 
             success:
                 false,
