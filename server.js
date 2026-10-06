@@ -1,9 +1,10 @@
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
 import { fileURLToPath } from "url";
+import { Pool } from "pg";
 import { GoogleGenAI } from "@google/genai";
 
 // ======================================================
@@ -23,227 +24,81 @@ app.use(
     })
 );
 
-const PORT = process.env.PORT || 10000;
+const PORT =
+    process.env.PORT || 10000;
+
+// ======================================================
+// DATABASE
+// ======================================================
+
+const DATABASE_URL =
+    process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+    console.error(
+        "DATABASE_URL is not configured."
+    );
+    process.exit(1);
+}
+
+const pool = new Pool({
+    connectionString:
+        DATABASE_URL,
+
+    ssl:
+        process.env.NODE_ENV === "production"
+            ? {
+                rejectUnauthorized: false
+            }
+            : false
+});
 
 // ======================================================
 // DATA FILES
 // ======================================================
 
-const DATA_DIR = path.join(
-    __dirname,
-    "data"
-);
+const DATA_DIR =
+    path.join(
+        __dirname,
+        "data"
+    );
 
-const USERS_FILE = path.join(
-    DATA_DIR,
-    "users.json"
-);
+const USERS_FILE =
+    path.join(
+        DATA_DIR,
+        "users.json"
+    );
 
-const QUESTIONS_FILE = path.join(
-    DATA_DIR,
-    "questions.json"
-);
-
-const QUIZ_RESULTS_FILE = path.join(
-    DATA_DIR,
-    "quiz-results.json"
-);
-
-// ======================================================
-// CREATE DATA DIRECTORY / FILES
-// ======================================================
+const QUESTIONS_FILE =
+    path.join(
+        DATA_DIR,
+        "questions.json"
+    );
 
 if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, {
-        recursive: true
-    });
-}
-
-function ensureFile(
-    filePath,
-    defaultValue
-) {
-    if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(
-            filePath,
-            JSON.stringify(
-                defaultValue,
-                null,
-                2
-            ),
-            "utf8"
-        );
-    }
-}
-
-ensureFile(
-    USERS_FILE,
-    []
-);
-
-ensureFile(
-    QUESTIONS_FILE,
-    []
-);
-
-ensureFile(
-    QUIZ_RESULTS_FILE,
-    []
-);
-
-// ======================================================
-// JSON HELPERS
-// ======================================================
-
-function readJson(
-    filePath,
-    fallback
-) {
-    try {
-
-        if (!fs.existsSync(filePath)) {
-            return fallback;
+    fs.mkdirSync(
+        DATA_DIR,
+        {
+            recursive: true
         }
-
-        const content =
-            fs.readFileSync(
-                filePath,
-                "utf8"
-            ).trim();
-
-        if (!content) {
-            return fallback;
-        }
-
-        return JSON.parse(
-            content
-        );
-
-    } catch (error) {
-
-        console.error(
-            `Unable to read JSON file: ${filePath}`,
-            error
-        );
-
-        return fallback;
-    }
-}
-
-function writeJson(
-    filePath,
-    data
-) {
-    fs.writeFileSync(
-        filePath,
-        JSON.stringify(
-            data,
-            null,
-            2
-        ),
-        "utf8"
     );
 }
 
 // ======================================================
-// USERS
+// ENVIRONMENT
 // ======================================================
 
-function loadUsers() {
+const RESEND_API_KEY =
+    process.env.RESEND_API_KEY;
 
-    const data =
-        readJson(
-            USERS_FILE,
-            []
-        );
+const RESEND_FROM_EMAIL =
+    process.env.RESEND_FROM_EMAIL ||
+    "onboarding@resend.dev";
 
-    if (Array.isArray(data)) {
-        return data;
-    }
-
-    if (
-        data &&
-        Array.isArray(data.users)
-    ) {
-        return data.users;
-    }
-
-    return [];
-}
-
-function saveUsers(
-    users
-) {
-    writeJson(
-        USERS_FILE,
-        users
+const resendConfigured =
+    Boolean(
+        RESEND_API_KEY
     );
-}
-
-// ======================================================
-// QUIZ RESULTS
-// ======================================================
-
-function loadQuizResults() {
-
-    const data =
-        readJson(
-            QUIZ_RESULTS_FILE,
-            []
-        );
-
-    if (Array.isArray(data)) {
-        return data;
-    }
-
-    if (
-        data &&
-        Array.isArray(data.results)
-    ) {
-        return data.results;
-    }
-
-    return [];
-}
-
-function saveQuizResults(
-    results
-) {
-    writeJson(
-        QUIZ_RESULTS_FILE,
-        results
-    );
-}
-
-// ======================================================
-// QUESTIONS
-// ======================================================
-
-function loadQuestions() {
-
-    const data =
-        readJson(
-            QUESTIONS_FILE,
-            []
-        );
-
-    if (Array.isArray(data)) {
-        return data;
-    }
-
-    if (
-        data &&
-        Array.isArray(data.questions)
-    ) {
-        return data.questions;
-    }
-
-    return [];
-}
-
-// ======================================================
-// GEMINI CONFIGURATION
-// ======================================================
 
 const GEMINI_API_KEY =
     process.env.GEMINI_API_KEY;
@@ -265,7 +120,6 @@ if (GEMINI_API_KEY) {
     console.log(
         "Gemini AI service configured."
     );
-
 } else {
 
     console.log(
@@ -273,28 +127,11 @@ if (GEMINI_API_KEY) {
     );
 }
 
-// ======================================================
-// RESEND EMAIL CONFIGURATION
-// ======================================================
-
-const RESEND_API_KEY =
-    process.env.RESEND_API_KEY;
-
-const RESEND_FROM_EMAIL =
-    process.env.RESEND_FROM_EMAIL ||
-    "onboarding@resend.dev";
-
-const resendConfigured =
-    Boolean(
-        RESEND_API_KEY
-    );
-
 if (resendConfigured) {
 
     console.log(
         "Resend email service configured."
     );
-
 } else {
 
     console.log(
@@ -311,6 +148,71 @@ const OTP_EXPIRY_MS =
 
 const RESET_VERIFIED_EXPIRY_MS =
     10 * 60 * 1000;
+
+// ======================================================
+// DATABASE INITIALIZATION
+// ======================================================
+
+async function initializeDatabase() {
+
+    console.log(
+        "Initializing PostgreSQL database..."
+    );
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            auth_token TEXT,
+            reset_otp_hash TEXT,
+            reset_otp_expires_at TIMESTAMPTZ,
+            reset_otp_verified_until TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS
+        users_email_unique
+        ON users (LOWER(email))
+    `);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS
+        users_auth_token_unique
+        ON users (auth_token)
+        WHERE auth_token IS NOT NULL
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS quiz_results (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            subject TEXT,
+            difficulty TEXT,
+            questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+            answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+            score NUMERIC,
+            total_questions INTEGER,
+            correct_answers INTEGER,
+            answer_details JSONB NOT NULL DEFAULT '[]'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS
+        quiz_results_user_id_index
+        ON quiz_results(user_id)
+    `);
+
+    console.log(
+        "PostgreSQL database initialized successfully."
+    );
+}
 
 // ======================================================
 // PASSWORD HASHING
@@ -367,14 +269,14 @@ function verifyPassword(
             )
         );
 
-    } catch (error) {
+    } catch {
 
         return false;
     }
 }
 
 // ======================================================
-// AUTH TOKEN
+// TOKEN
 // ======================================================
 
 function createAuthToken() {
@@ -407,179 +309,58 @@ function hashOtp(
 }
 
 // ======================================================
-// EMAIL - RESEND
+// QUESTIONS
 // ======================================================
 
-async function sendPasswordResetOTP(
-    email,
-    otp
-) {
-
-    if (!RESEND_API_KEY) {
-
-        throw new Error(
-            "Resend email service is not configured."
-        );
-    }
-
-    const response =
-        await fetch(
-            "https://api.resend.com/emails",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type":
-                        "application/json",
-
-                    "Authorization":
-                        `Bearer ${RESEND_API_KEY}`
-                },
-
-                body: JSON.stringify({
-                    from:
-                        RESEND_FROM_EMAIL,
-
-                    to: [
-                        email
-                    ],
-
-                    subject:
-                        "Study Buddy AI - Password Reset OTP",
-
-                    html: `
-                        <div style="
-                            font-family: Arial, sans-serif;
-                            max-width: 600px;
-                            margin: 0 auto;
-                            padding: 20px;
-                        ">
-
-                            <h2>
-                                Study Buddy AI
-                            </h2>
-
-                            <p>
-                                We received a request
-                                to reset your password.
-                            </p>
-
-                            <p>
-                                Your password reset OTP is:
-                            </p>
-
-                            <div style="
-                                font-size: 32px;
-                                font-weight: bold;
-                                letter-spacing: 8px;
-                                margin: 25px 0;
-                            ">
-                                ${otp}
-                            </div>
-
-                            <p>
-                                This OTP is valid for
-                                10 minutes.
-                            </p>
-
-                            <p>
-                                If you did not request
-                                a password reset, you can
-                                safely ignore this email.
-                            </p>
-
-                            <p>
-                                Regards,<br>
-                                Study Buddy AI
-                            </p>
-
-                        </div>
-                    `
-                })
-            }
-        );
-
-    const responseText =
-        await response.text();
-
-    if (!response.ok) {
-
-        console.error(
-            "Resend API error:",
-            response.status,
-            responseText
-        );
-
-        throw new Error(
-            `Resend API error: ${response.status}`
-        );
-    }
-
-    let result = {};
+function loadQuestions() {
 
     try {
 
-        result =
-            JSON.parse(
-                responseText
-            );
+        if (
+            !fs.existsSync(
+                QUESTIONS_FILE
+            )
+        ) {
+            return [];
+        }
 
-    } catch {
+        const content =
+            fs.readFileSync(
+                QUESTIONS_FILE,
+                "utf8"
+            ).trim();
 
-        result = {};
-    }
+        if (!content) {
+            return [];
+        }
 
-    return result;
-}
+        const data =
+            JSON.parse(content);
 
-// ======================================================
-// AUTHENTICATION HELPER
-// ======================================================
+        if (Array.isArray(data)) {
+            return data;
+        }
 
-function getTokenFromRequest(
-    req
-) {
+        if (
+            data &&
+            Array.isArray(
+                data.questions
+            )
+        ) {
+            return data.questions;
+        }
 
-    const header =
-        req.headers.authorization;
+        return [];
 
-    if (
-        !header ||
-        !header.startsWith("Bearer ")
-    ) {
-        return null;
-    }
+    } catch (error) {
 
-    return header
-        .substring(7)
-        .trim();
-}
-
-function getAuthenticatedUser(
-    req
-) {
-
-    const token =
-        getTokenFromRequest(
-            req
+        console.error(
+            "Unable to load questions:",
+            error
         );
 
-    if (!token) {
-        return null;
+        return [];
     }
-
-    const users =
-        loadUsers();
-
-    return (
-        users.find(
-            user =>
-                user &&
-                user.authToken ===
-                token
-        ) ||
-        null
-    );
 }
 
 // ======================================================
@@ -623,44 +404,48 @@ function normalizeAnswer(
             ""
         );
 
-    if (optionName === "OPTIONA") {
+    if (
+        optionName === "OPTIONA"
+    ) {
         return "A";
     }
 
-    if (optionName === "OPTIONB") {
+    if (
+        optionName === "OPTIONB"
+    ) {
         return "B";
     }
 
-    if (optionName === "OPTIONC") {
+    if (
+        optionName === "OPTIONC"
+    ) {
         return "C";
     }
 
-    if (optionName === "OPTIOND") {
+    if (
+        optionName === "OPTIOND"
+    ) {
         return "D";
     }
 
     const optionA =
         String(
-            question?.optionA ||
-            ""
+            question?.optionA || ""
         ).trim();
 
     const optionB =
         String(
-            question?.optionB ||
-            ""
+            question?.optionB || ""
         ).trim();
 
     const optionC =
         String(
-            question?.optionC ||
-            ""
+            question?.optionC || ""
         ).trim();
 
     const optionD =
         String(
-            question?.optionD ||
-            ""
+            question?.optionD || ""
         ).trim();
 
     if (
@@ -776,6 +561,179 @@ function getOptionText(
 }
 
 // ======================================================
+// RESEND EMAIL
+// ======================================================
+
+async function sendPasswordResetOTP(
+    email,
+    otp
+) {
+
+    if (!RESEND_API_KEY) {
+
+        throw new Error(
+            "Resend email service is not configured."
+        );
+    }
+
+    const response =
+        await fetch(
+            "https://api.resend.com/emails",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json",
+
+                    "Authorization":
+                        `Bearer ${RESEND_API_KEY}`
+                },
+
+                body: JSON.stringify({
+
+                    from:
+                        RESEND_FROM_EMAIL,
+
+                    to: [
+                        email
+                    ],
+
+                    subject:
+                        "Study Buddy AI - Password Reset OTP",
+
+                    html: `
+                        <div style="
+                            font-family: Arial, sans-serif;
+                            max-width: 600px;
+                            margin: 0 auto;
+                            padding: 20px;
+                        ">
+
+                            <h2>
+                                Study Buddy AI
+                            </h2>
+
+                            <p>
+                                We received a request
+                                to reset your password.
+                            </p>
+
+                            <p>
+                                Your password reset OTP is:
+                            </p>
+
+                            <div style="
+                                font-size: 32px;
+                                font-weight: bold;
+                                letter-spacing: 8px;
+                                margin: 25px 0;
+                            ">
+                                ${otp}
+                            </div>
+
+                            <p>
+                                This OTP is valid for
+                                10 minutes.
+                            </p>
+
+                            <p>
+                                If you did not request
+                                a password reset, you can
+                                safely ignore this email.
+                            </p>
+
+                            <p>
+                                Regards,<br>
+                                Study Buddy AI
+                            </p>
+
+                        </div>
+                    `
+                })
+            }
+        );
+
+    const text =
+        await response.text();
+
+    if (!response.ok) {
+
+        console.error(
+            "Resend API error:",
+            response.status,
+            text
+        );
+
+        throw new Error(
+            `Resend API error: ${response.status}`
+        );
+    }
+
+    return text;
+}
+
+// ======================================================
+// AUTH TOKEN
+// ======================================================
+
+function getTokenFromRequest(
+    req
+) {
+
+    const header =
+        req.headers.authorization;
+
+    if (
+        !header ||
+        !header.startsWith(
+            "Bearer "
+        )
+    ) {
+        return null;
+    }
+
+    return header
+        .substring(7)
+        .trim();
+}
+
+async function getAuthenticatedUser(
+    req
+) {
+
+    const token =
+        getTokenFromRequest(
+            req
+        );
+
+    if (!token) {
+        return null;
+    }
+
+    const result =
+        await pool.query(
+            `
+            SELECT *
+            FROM users
+            WHERE auth_token = $1
+            LIMIT 1
+            `,
+            [
+                token
+            ]
+        );
+
+    if (
+        result.rows.length === 0
+    ) {
+        return null;
+    }
+
+    return result.rows[0];
+}
+
+// ======================================================
 // HOME
 // ======================================================
 
@@ -791,15 +749,16 @@ app.get(
             message:
                 "Study Buddy AI server is running.",
 
+            database:
+                "PostgreSQL",
+
             gemini:
                 Boolean(
                     GEMINI_API_KEY
                 ),
 
-            passwordReset:
+            resend:
                 resendConfigured
-                    ? "Email OTP configured"
-                    : "Email OTP not configured"
         });
     }
 );
@@ -810,16 +769,45 @@ app.get(
 
 app.get(
     "/health",
-    (req, res) => {
+    async (req, res) => {
 
-        res.json({
+        try {
 
-            success:
-                true,
+            await pool.query(
+                "SELECT 1"
+            );
 
-            status:
-                "healthy"
-        });
+            res.json({
+
+                success:
+                    true,
+
+                status:
+                    "healthy",
+
+                database:
+                    "connected"
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Health database error:",
+                error
+            );
+
+            res.status(500).json({
+
+                success:
+                    false,
+
+                status:
+                    "unhealthy",
+
+                database:
+                    "disconnected"
+            });
+        }
     }
 );
 
@@ -829,7 +817,7 @@ app.get(
 
 app.post(
     "/api/auth/signup",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -921,22 +909,26 @@ app.post(
                 });
             }
 
-            const users =
-                loadUsers();
+            // ==========================================
+            // CHECK EXISTING USER
+            // ==========================================
 
             const existingUser =
-                users.find(
-                    user =>
-                        user &&
-                        String(
-                            user.email || ""
-                        )
-                            .trim()
-                            .toLowerCase() ===
+                await pool.query(
+                    `
+                    SELECT id
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [
                         cleanEmail
+                    ]
                 );
 
-            if (existingUser) {
+            if (
+                existingUser.rows.length > 0
+            ) {
 
                 return res.status(409).json({
 
@@ -956,49 +948,37 @@ app.post(
                     password
                 );
 
-            const newUser = {
+            const userId =
+                crypto.randomUUID();
 
-                id:
-                    crypto.randomUUID(),
-
-                name:
+            await pool.query(
+                `
+                INSERT INTO users (
+                    id,
+                    name,
+                    email,
+                    password_hash,
+                    password_salt
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5
+                )
+                `,
+                [
+                    userId,
                     cleanName,
-
-                email:
                     cleanEmail,
-
-                passwordHash:
                     passwordHash,
-
-                passwordSalt:
-                    passwordSalt,
-
-                authToken:
-                    null,
-
-                resetOtpHash:
-                    null,
-
-                resetOtpExpiresAt:
-                    null,
-
-                resetOtpVerifiedUntil:
-                    null,
-
-                createdAt:
-                    new Date().toISOString()
-            };
-
-            users.push(
-                newUser
-            );
-
-            saveUsers(
-                users
+                    passwordSalt
+                ]
             );
 
             console.log(
-                `New user registered: ${cleanEmail}`
+                `New PostgreSQL user registered: ${cleanEmail}`
             );
 
             return res.status(201).json({
@@ -1012,13 +992,13 @@ app.post(
                 user: {
 
                     id:
-                        newUser.id,
+                        userId,
 
                     name:
-                        newUser.name,
+                        cleanName,
 
                     email:
-                        newUser.email
+                        cleanEmail
                 }
             });
 
@@ -1028,6 +1008,20 @@ app.post(
                 "Signup error:",
                 error
             );
+
+            if (
+                error.code === "23505"
+            ) {
+
+                return res.status(409).json({
+
+                    success:
+                        false,
+
+                    message:
+                        "Account already exists. Please sign in."
+                });
+            }
 
             return res.status(500).json({
 
@@ -1047,7 +1041,7 @@ app.post(
 
 app.post(
     "/api/auth/signin",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -1076,22 +1070,22 @@ app.post(
                     .trim()
                     .toLowerCase();
 
-            const users =
-                loadUsers();
-
-            const user =
-                users.find(
-                    item =>
-                        item &&
-                        String(
-                            item.email || ""
-                        )
-                            .trim()
-                            .toLowerCase() ===
+            const result =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [
                         cleanEmail
+                    ]
                 );
 
-            if (!user) {
+            if (
+                result.rows.length === 0
+            ) {
 
                 return res.status(401).json({
 
@@ -1103,11 +1097,14 @@ app.post(
                 });
             }
 
+            const user =
+                result.rows[0];
+
             const validPassword =
                 verifyPassword(
                     password,
-                    user.passwordHash,
-                    user.passwordSalt
+                    user.password_hash,
+                    user.password_salt
                 );
 
             if (!validPassword) {
@@ -1125,11 +1122,16 @@ app.post(
             const token =
                 createAuthToken();
 
-            user.authToken =
-                token;
-
-            saveUsers(
-                users
+            await pool.query(
+                `
+                UPDATE users
+                SET auth_token = $1
+                WHERE id = $2
+                `,
+                [
+                    token,
+                    user.id
+                ]
             );
 
             return res.json({
@@ -1180,12 +1182,12 @@ app.post(
 
 app.get(
     "/api/auth/me",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const user =
-                getAuthenticatedUser(
+                await getAuthenticatedUser(
                     req
                 );
 
@@ -1244,7 +1246,7 @@ app.get(
 
 app.post(
     "/api/auth/logout",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -1255,26 +1257,16 @@ app.post(
 
             if (token) {
 
-                const users =
-                    loadUsers();
-
-                const user =
-                    users.find(
-                        item =>
-                            item &&
-                            item.authToken ===
-                            token
-                    );
-
-                if (user) {
-
-                    user.authToken =
-                        null;
-
-                    saveUsers(
-                        users
-                    );
-                }
+                await pool.query(
+                    `
+                    UPDATE users
+                    SET auth_token = NULL
+                    WHERE auth_token = $1
+                    `,
+                    [
+                        token
+                    ]
+                );
             }
 
             return res.json({
@@ -1336,22 +1328,22 @@ app.post(
                     .trim()
                     .toLowerCase();
 
-            const users =
-                loadUsers();
-
-            const user =
-                users.find(
-                    item =>
-                        item &&
-                        String(
-                            item.email || ""
-                        )
-                            .trim()
-                            .toLowerCase() ===
+            const result =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [
                         cleanEmail
+                    ]
                 );
 
-            if (!user) {
+            if (
+                result.rows.length === 0
+            ) {
 
                 return res.status(404).json({
 
@@ -1379,32 +1371,35 @@ app.post(
                 generateOtp();
 
             const otpHash =
-                hashOtp(otp);
+                hashOtp(
+                    otp
+                );
 
             const expiresAt =
-                Date.now() +
-                OTP_EXPIRY_MS;
+                new Date(
+                    Date.now() +
+                    OTP_EXPIRY_MS
+                );
 
             await sendPasswordResetOTP(
                 cleanEmail,
                 otp
             );
 
-            user.resetOtpHash =
-                otpHash;
-
-            user.resetOtpExpiresAt =
-                expiresAt;
-
-            user.resetOtpVerifiedUntil =
-                null;
-
-            saveUsers(
-                users
-            );
-
-            console.log(
-                `Password reset OTP sent to ${cleanEmail}`
+            await pool.query(
+                `
+                UPDATE users
+                SET
+                    reset_otp_hash = $1,
+                    reset_otp_expires_at = $2,
+                    reset_otp_verified_until = NULL
+                WHERE id = $3
+                `,
+                [
+                    otpHash,
+                    expiresAt,
+                    result.rows[0].id
+                ]
             );
 
             return res.json({
@@ -1441,7 +1436,7 @@ app.post(
 
 app.post(
     "/api/auth/verify-reset-otp",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -1470,22 +1465,22 @@ app.post(
                     .trim()
                     .toLowerCase();
 
-            const users =
-                loadUsers();
-
-            const user =
-                users.find(
-                    item =>
-                        item &&
-                        String(
-                            item.email || ""
-                        )
-                            .trim()
-                            .toLowerCase() ===
+            const result =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [
                         cleanEmail
+                    ]
                 );
 
-            if (!user) {
+            if (
+                result.rows.length === 0
+            ) {
 
                 return res.status(404).json({
 
@@ -1497,9 +1492,12 @@ app.post(
                 });
             }
 
+            const user =
+                result.rows[0];
+
             if (
-                !user.resetOtpHash ||
-                !user.resetOtpExpiresAt
+                !user.reset_otp_hash ||
+                !user.reset_otp_expires_at
             ) {
 
                 return res.status(400).json({
@@ -1513,18 +1511,23 @@ app.post(
             }
 
             if (
-                Date.now() >
-                user.resetOtpExpiresAt
+                new Date(
+                    user.reset_otp_expires_at
+                ).getTime() <
+                Date.now()
             ) {
 
-                user.resetOtpHash =
-                    null;
-
-                user.resetOtpExpiresAt =
-                    null;
-
-                saveUsers(
-                    users
+                await pool.query(
+                    `
+                    UPDATE users
+                    SET
+                        reset_otp_hash = NULL,
+                        reset_otp_expires_at = NULL
+                    WHERE id = $1
+                    `,
+                    [
+                        user.id
+                    ]
                 );
 
                 return res.status(400).json({
@@ -1546,7 +1549,7 @@ app.post(
 
             if (
                 submittedOtpHash !==
-                user.resetOtpHash
+                user.reset_otp_hash
             ) {
 
                 return res.status(400).json({
@@ -1559,12 +1562,22 @@ app.post(
                 });
             }
 
-            user.resetOtpVerifiedUntil =
-                Date.now() +
-                RESET_VERIFIED_EXPIRY_MS;
+            const verifiedUntil =
+                new Date(
+                    Date.now() +
+                    RESET_VERIFIED_EXPIRY_MS
+                );
 
-            saveUsers(
-                users
+            await pool.query(
+                `
+                UPDATE users
+                SET reset_otp_verified_until = $1
+                WHERE id = $2
+                `,
+                [
+                    verifiedUntil,
+                    user.id
+                ]
             );
 
             return res.json({
@@ -1601,7 +1614,7 @@ app.post(
 
 app.post(
     "/api/auth/reset-password",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -1663,22 +1676,22 @@ app.post(
                     .trim()
                     .toLowerCase();
 
-            const users =
-                loadUsers();
-
-            const user =
-                users.find(
-                    item =>
-                        item &&
-                        String(
-                            item.email || ""
-                        )
-                            .trim()
-                            .toLowerCase() ===
+            const result =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [
                         cleanEmail
+                    ]
                 );
 
-            if (!user) {
+            if (
+                result.rows.length === 0
+            ) {
 
                 return res.status(404).json({
 
@@ -1690,10 +1703,15 @@ app.post(
                 });
             }
 
+            const user =
+                result.rows[0];
+
             if (
-                !user.resetOtpVerifiedUntil ||
-                Date.now() >
-                user.resetOtpVerifiedUntil
+                !user.reset_otp_verified_until ||
+                new Date(
+                    user.reset_otp_verified_until
+                ).getTime() <
+                Date.now()
             ) {
 
                 return res.status(400).json({
@@ -1714,30 +1732,23 @@ app.post(
                     newPassword
                 );
 
-            user.passwordHash =
-                passwordHash;
-
-            user.passwordSalt =
-                passwordSalt;
-
-            user.resetOtpHash =
-                null;
-
-            user.resetOtpExpiresAt =
-                null;
-
-            user.resetOtpVerifiedUntil =
-                null;
-
-            user.authToken =
-                null;
-
-            saveUsers(
-                users
-            );
-
-            console.log(
-                `Password reset successful for ${cleanEmail}`
+            await pool.query(
+                `
+                UPDATE users
+                SET
+                    password_hash = $1,
+                    password_salt = $2,
+                    reset_otp_hash = NULL,
+                    reset_otp_expires_at = NULL,
+                    reset_otp_verified_until = NULL,
+                    auth_token = NULL
+                WHERE id = $3
+                `,
+                [
+                    passwordHash,
+                    passwordSalt,
+                    user.id
+                ]
             );
 
             return res.json({
@@ -1769,7 +1780,7 @@ app.post(
 );
 
 // ======================================================
-// QUIZ - GET QUESTIONS
+// QUIZ QUESTIONS
 // ======================================================
 
 app.get(
@@ -1787,9 +1798,9 @@ app.get(
             let questions =
                 loadQuestions();
 
-            // ==================================================
-            // FILTER SUBJECT
-            // ==================================================
+            // ==========================================
+            // SUBJECT
+            // ==========================================
 
             if (
                 subject &&
@@ -1803,31 +1814,22 @@ app.get(
 
                 questions =
                     questions.filter(
-                        question => {
-
-                            const questionSubject =
-                                String(
-                                    question.subject ||
-                                    ""
-                                )
-                                    .trim()
-                                    .toLowerCase();
-
-                            return (
-                                questionSubject ===
-                                requestedSubject
-                            );
-                        }
+                        question =>
+                            String(
+                                question.subject ||
+                                ""
+                            )
+                                .trim()
+                                .toLowerCase() ===
+                            requestedSubject
                     );
             }
 
-            // ==================================================
-            // FILTER DIFFICULTY
+            // ==========================================
+            // DIFFICULTY
             //
-            // IMPORTANT:
-            // "All" means ALL difficulty levels.
-            // Do NOT filter when difficulty = All.
-            // ==================================================
+            // ALL = NO DIFFICULTY FILTER
+            // ==========================================
 
             if (
                 difficulty &&
@@ -1844,27 +1846,20 @@ app.get(
 
                 questions =
                     questions.filter(
-                        question => {
-
-                            const questionDifficulty =
-                                String(
-                                    question.difficulty ||
-                                    ""
-                                )
-                                    .trim()
-                                    .toLowerCase();
-
-                            return (
-                                questionDifficulty ===
-                                requestedDifficulty
-                            );
-                        }
+                        question =>
+                            String(
+                                question.difficulty ||
+                                ""
+                            )
+                                .trim()
+                                .toLowerCase() ===
+                            requestedDifficulty
                     );
             }
 
-            // ==================================================
-            // SHUFFLE QUESTIONS
-            // ==================================================
+            // ==========================================
+            // SHUFFLE
+            // ==========================================
 
             questions =
                 [...questions].sort(
@@ -1873,9 +1868,9 @@ app.get(
                         0.5
                 );
 
-            // ==================================================
-            // QUESTION COUNT
-            // ==================================================
+            // ==========================================
+            // COUNT
+            // ==========================================
 
             let requestedCount =
                 parseInt(
@@ -1900,12 +1895,9 @@ app.get(
                     requestedCount
                 );
 
-            // ==================================================
-            // REMOVE ANSWER DATA
-            //
-            // Correct answer and solution should not be
-            // sent before the student answers.
-            // ==================================================
+            // ==========================================
+            // HIDE ANSWERS
+            // ==========================================
 
             const safeQuestions =
                 questions.map(
@@ -1930,27 +1922,6 @@ app.get(
                     }
                 );
 
-            console.log(
-                "Quiz questions request:",
-                {
-                    subject:
-                        subject || "All",
-
-                    difficulty:
-                        difficulty || "All",
-
-                    requestedCount:
-                        requestedCount,
-
-                    returnedCount:
-                        safeQuestions.length
-                }
-            );
-
-            // ==================================================
-            // NO QUESTIONS FOUND
-            // ==================================================
-
             if (
                 safeQuestions.length === 0
             ) {
@@ -1963,23 +1934,10 @@ app.get(
                     message:
                         "No questions found.",
 
-                    subject:
-                        subject || "",
-
-                    difficulty:
-                        difficulty || "",
-
-                    count:
-                        0,
-
                     questions:
                         []
                 });
             }
-
-            // ==================================================
-            // RESPONSE
-            // ==================================================
 
             return res.json({
 
@@ -2013,25 +1971,21 @@ app.get(
 );
 
 // ======================================================
-// QUIZ - SUBMIT
-//
-// Supports:
-// 1. Single question answer
-// 2. Complete quiz submission
+// QUIZ SUBMIT
 // ======================================================
 
 app.post(
     "/api/quiz/submit",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const body =
                 req.body || {};
 
-            // ==================================================
+            // ==========================================
             // SINGLE QUESTION ANSWER
-            // ==================================================
+            // ==========================================
 
             if (
                 body.questionId !== undefined &&
@@ -2042,11 +1996,6 @@ app.post(
                     String(
                         body.questionId
                     );
-
-                const selectedAnswer =
-                    String(
-                        body.selectedAnswer
-                    ).trim();
 
                 const questions =
                     loadQuestions();
@@ -2073,9 +2022,9 @@ app.post(
                     });
                 }
 
-                const normalizedSelectedAnswer =
+                const selectedAnswer =
                     normalizeAnswer(
-                        selectedAnswer,
+                        body.selectedAnswer,
                         question
                     );
 
@@ -2085,44 +2034,15 @@ app.post(
                     );
 
                 const isCorrect =
-                    normalizedSelectedAnswer !== "" &&
+                    selectedAnswer !== "" &&
                     correctAnswer !== "" &&
-                    normalizedSelectedAnswer ===
+                    selectedAnswer ===
                         correctAnswer;
 
                 const solution =
                     getQuestionSolution(
                         question
                     );
-
-                const selectedOptionText =
-                    getOptionText(
-                        question,
-                        normalizedSelectedAnswer
-                    );
-
-                const correctOptionText =
-                    getOptionText(
-                        question,
-                        correctAnswer
-                    );
-
-                console.log(
-                    "Quiz answer:",
-                    {
-                        questionId:
-                            questionId,
-
-                        selectedAnswer:
-                            normalizedSelectedAnswer,
-
-                        correctAnswer:
-                            correctAnswer,
-
-                        correct:
-                            isCorrect
-                    }
-                );
 
                 return res.json({
 
@@ -2136,16 +2056,22 @@ app.post(
                         question.id,
 
                     selectedAnswer:
-                        normalizedSelectedAnswer,
+                        selectedAnswer,
 
                     selectedOption:
-                        selectedOptionText,
+                        getOptionText(
+                            question,
+                            selectedAnswer
+                        ),
 
                     correctAnswer:
                         correctAnswer,
 
                     correctOption:
-                        correctOptionText,
+                        getOptionText(
+                            question,
+                            correctAnswer
+                        ),
 
                     solution:
                         solution,
@@ -2155,9 +2081,9 @@ app.post(
                 });
             }
 
-            // ==================================================
-            // COMPLETE QUIZ SUBMISSION
-            // ==================================================
+            // ==========================================
+            // COMPLETE QUIZ
+            // ==========================================
 
             const {
                 userId,
@@ -2180,10 +2106,6 @@ app.post(
             const answerDetails =
                 [];
 
-            // ==================================================
-            // CALCULATE ANSWERS
-            // ==================================================
-
             if (
                 Array.isArray(
                     submittedQuestions
@@ -2191,22 +2113,21 @@ app.post(
             ) {
 
                 submittedQuestions.forEach(
-                    submittedQuestion => {
+                    (
+                        submittedQuestion,
+                        index
+                    ) => {
 
-                        if (!submittedQuestion) {
+                        if (
+                            !submittedQuestion
+                        ) {
                             return;
                         }
 
                         const questionId =
-                            submittedQuestion.id !== undefined
-                                ? String(
-                                    submittedQuestion.id
-                                )
-                                : null;
-
-                        if (!questionId) {
-                            return;
-                        }
+                            String(
+                                submittedQuestion.id
+                            );
 
                         const serverQuestion =
                             allQuestions.find(
@@ -2231,51 +2152,18 @@ app.post(
                             )
                         ) {
 
-                            const answerItem =
-                                answers.find(
-                                    item => {
-
-                                        if (
-                                            item &&
-                                            typeof item ===
-                                                "object"
-                                        ) {
-
-                                            return (
-                                                String(
-                                                    item.questionId
-                                                ) ===
-                                                questionId
-                                            );
-                                        }
-
-                                        return false;
-                                    }
-                                );
-
-                            if (answerItem) {
+                            if (
+                                answers[index] &&
+                                typeof answers[index] ===
+                                    "object"
+                            ) {
 
                                 userAnswer =
-                                    answerItem.selectedAnswer ||
-                                    answerItem.answer ||
+                                    answers[index].selectedAnswer ||
+                                    answers[index].answer ||
                                     "";
-                            }
-                        }
 
-                        if (
-                            !userAnswer &&
-                            Array.isArray(
-                                answers
-                            )
-                        ) {
-
-                            const index =
-                                submittedQuestions.indexOf(
-                                    submittedQuestion
-                                );
-
-                            if (
-                                index >= 0 &&
+                            } else if (
                                 typeof answers[index] ===
                                     "string"
                             ) {
@@ -2341,31 +2229,12 @@ app.post(
                 );
             }
 
-            // ==================================================
-            // FINAL CORRECT ANSWERS
-            // ==================================================
-
-            let finalCorrectAnswers =
-                calculatedCorrectAnswers;
-
-            if (
-                answerDetails.length === 0 &&
-                Number.isFinite(
-                    Number(
+            const finalCorrectAnswers =
+                answerDetails.length > 0
+                    ? calculatedCorrectAnswers
+                    : Number(
                         correctAnswers
-                    )
-                )
-            ) {
-
-                finalCorrectAnswers =
-                    Number(
-                        correctAnswers
-                    );
-            }
-
-            // ==================================================
-            // TOTAL QUESTIONS
-            // ==================================================
+                    ) || 0;
 
             const finalTotalQuestions =
                 Number(
@@ -2379,10 +2248,6 @@ app.post(
                         : 0
                 );
 
-            // ==================================================
-            // SCORE
-            // ==================================================
-
             let finalScore =
                 Number(
                     score
@@ -2391,88 +2256,68 @@ app.post(
             if (
                 !Number.isFinite(
                     finalScore
-                ) ||
-                finalScore < 0
+                )
             ) {
 
-                if (
+                finalScore =
                     finalTotalQuestions > 0
-                ) {
-
-                    finalScore =
-                        (
+                        ? (
                             finalCorrectAnswers /
                             finalTotalQuestions
-                        ) *
-                        100;
-
-                } else {
-
-                    finalScore =
-                        0;
-                }
+                        ) * 100
+                        : 0;
             }
 
-            // ==================================================
-            // SAVE RESULT
-            // ==================================================
+            const resultId =
+                crypto.randomUUID();
 
-            const results =
-                loadQuizResults();
-
-            const result = {
-
-                id:
-                    crypto.randomUUID(),
-
-                userId:
+            await pool.query(
+                `
+                INSERT INTO quiz_results (
+                    id,
+                    user_id,
+                    subject,
+                    difficulty,
+                    questions,
+                    answers,
+                    score,
+                    total_questions,
+                    correct_answers,
+                    answer_details
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5::jsonb,
+                    $6::jsonb,
+                    $7,
+                    $8,
+                    $9,
+                    $10::jsonb
+                )
+                `,
+                [
+                    resultId,
                     userId || null,
-
-                subject:
                     subject || "",
-
-                difficulty:
                     difficulty || "",
-
-                questions:
-                    Array.isArray(
-                        submittedQuestions
-                    )
-                        ? submittedQuestions
-                        : [],
-
-                answers:
-                    Array.isArray(
-                        answers
-                    )
-                        ? answers
-                        : [],
-
-                score:
+                    JSON.stringify(
+                        submittedQuestions || []
+                    ),
+                    JSON.stringify(
+                        answers || []
+                    ),
                     Number(
                         finalScore.toFixed(2)
                     ),
-
-                totalQuestions:
                     finalTotalQuestions,
-
-                correctAnswers:
                     finalCorrectAnswers,
-
-                answerDetails:
-                    answerDetails,
-
-                createdAt:
-                    new Date()
-                        .toISOString()
-            };
-
-            results.push(
-                result
-            );
-
-            saveQuizResults(
-                results
+                    JSON.stringify(
+                        answerDetails
+                    )
+                ]
             );
 
             return res.json({
@@ -2483,7 +2328,34 @@ app.post(
                 message:
                     "Quiz result saved successfully.",
 
-                result
+                result: {
+
+                    id:
+                        resultId,
+
+                    userId:
+                        userId || null,
+
+                    subject:
+                        subject || "",
+
+                    difficulty:
+                        difficulty || "",
+
+                    score:
+                        Number(
+                            finalScore.toFixed(2)
+                        ),
+
+                    totalQuestions:
+                        finalTotalQuestions,
+
+                    correctAnswers:
+                        finalCorrectAnswers,
+
+                    answerDetails:
+                        answerDetails
+                }
             });
 
         } catch (error) {
@@ -2511,7 +2383,7 @@ app.post(
 
 app.get(
     "/api/quiz/history",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -2519,25 +2391,85 @@ app.get(
                 userId
             } = req.query;
 
-            let results =
-                loadQuizResults();
+            let query = `
+                SELECT
+                    id,
+                    user_id,
+                    subject,
+                    difficulty,
+                    questions,
+                    answers,
+                    score,
+                    total_questions,
+                    correct_answers,
+                    answer_details,
+                    created_at
+                FROM quiz_results
+            `;
+
+            const values = [];
 
             if (userId) {
 
-                results =
-                    results.filter(
-                        item =>
-                            String(
-                                item.userId
-                            ) ===
-                            String(
-                                userId
-                            )
-                    );
+                query += `
+                    WHERE user_id = $1
+                `;
+
+                values.push(
+                    String(userId)
+                );
             }
 
-            results =
-                [...results].reverse();
+            query += `
+                ORDER BY created_at DESC
+            `;
+
+            const result =
+                await pool.query(
+                    query,
+                    values
+                );
+
+            const results =
+                result.rows.map(
+                    row => ({
+
+                        id:
+                            row.id,
+
+                        userId:
+                            row.user_id,
+
+                        subject:
+                            row.subject,
+
+                        difficulty:
+                            row.difficulty,
+
+                        questions:
+                            row.questions,
+
+                        answers:
+                            row.answers,
+
+                        score:
+                            Number(
+                                row.score || 0
+                            ),
+
+                        totalQuestions:
+                            row.total_questions,
+
+                        correctAnswers:
+                            row.correct_answers,
+
+                        answerDetails:
+                            row.answer_details,
+
+                        createdAt:
+                            row.created_at
+                    })
+                );
 
             return res.json({
 
@@ -2635,7 +2567,6 @@ Instructions:
 - Give step-by-step explanations when useful.
 - Do not invent facts.
 - For mathematics and science, show calculations when appropriate.
-- If the question is ambiguous, explain the reasonable interpretation.
 - Keep the response focused on learning.
 `;
 
@@ -2649,17 +2580,13 @@ Instructions:
                         aiPrompt
                 });
 
-            const answer =
-                response.text ||
-                "";
-
             return res.json({
 
                 success:
                     true,
 
                 answer:
-                    answer
+                    response.text || ""
             });
 
         } catch (error) {
@@ -2700,7 +2627,7 @@ app.use(
 );
 
 // ======================================================
-// GLOBAL ERROR HANDLER
+// GLOBAL ERROR
 // ======================================================
 
 app.use(
@@ -2731,60 +2658,71 @@ app.use(
 // START SERVER
 // ======================================================
 
-app.listen(
-    PORT,
-    () => {
+async function startServer() {
 
-        console.log(
-            "=========================================="
+    try {
+
+        await initializeDatabase();
+
+        await pool.query(
+            "SELECT NOW()"
         );
 
         console.log(
-            `Study Buddy AI server running on port ${PORT}`
+            "PostgreSQL connection successful."
         );
 
-        console.log(
-            `Users file: ${USERS_FILE}`
+        app.listen(
+            PORT,
+            () => {
+
+                console.log(
+                    "=========================================="
+                );
+
+                console.log(
+                    `Study Buddy AI server running on port ${PORT}`
+                );
+
+                console.log(
+                    "Database: PostgreSQL"
+                );
+
+                console.log(
+                    `Gemini model: ${GEMINI_MODEL}`
+                );
+
+                console.log(
+                    `Gemini: ${
+                        GEMINI_API_KEY
+                            ? "configured"
+                            : "not configured"
+                    }`
+                );
+
+                console.log(
+                    `Resend: ${
+                        resendConfigured
+                            ? "configured"
+                            : "not configured"
+                    }`
+                );
+
+                console.log(
+                    "=========================================="
+                );
+            }
         );
 
-        console.log(
-            `Questions file: ${QUESTIONS_FILE}`
+    } catch (error) {
+
+        console.error(
+            "Unable to start server:",
+            error
         );
 
-        console.log(
-            `Quiz results file: ${QUIZ_RESULTS_FILE}`
-        );
-
-        console.log(
-            `Gemini model: ${GEMINI_MODEL}`
-        );
-
-        console.log(
-            `Gemini: ${
-                GEMINI_API_KEY
-                    ? "configured"
-                    : "not configured"
-            }`
-        );
-
-        console.log(
-            `Resend: ${
-                RESEND_API_KEY
-                    ? "configured"
-                    : "not configured"
-            }`
-        );
-
-        console.log(
-            `Password reset email: ${
-                resendConfigured
-                    ? "configured"
-                    : "not configured"
-            }`
-        );
-
-        console.log(
-            "=========================================="
-        );
+        process.exit(1);
     }
-);
+}
+
+startServer();
