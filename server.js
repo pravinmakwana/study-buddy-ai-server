@@ -1,376 +1,388 @@
 import express from "express";
 import cors from "cors";
-import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { Pool } from "pg";
+import pg from "pg";
 import { GoogleGenAI } from "@google/genai";
 
-// ======================================================
-// BASIC CONFIGURATION
-// ======================================================
+const { Pool } = pg;
+
+/*
+========================================================
+BASIC CONFIGURATION
+========================================================
+*/
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 
+const PORT = process.env.PORT || 10000;
+
 app.use(cors());
+app.use(express.json({ limit: "2mb" }));
 
-app.use(
-    express.json({
-        limit: "5mb"
-    })
-);
+/*
+========================================================
+ENVIRONMENT VARIABLES
+========================================================
+*/
 
-const PORT =
-    process.env.PORT || 10000;
-
-// ======================================================
-// DATABASE
-// ======================================================
-
-const DATABASE_URL =
-    process.env.DATABASE_URL;
-
-if (!DATABASE_URL) {
-    console.error(
-        "DATABASE_URL is not configured."
-    );
-    process.exit(1);
-}
-
-const pool = new Pool({
-    connectionString:
-        DATABASE_URL,
-
-    ssl:
-        process.env.NODE_ENV === "production"
-            ? {
-                rejectUnauthorized: false
-            }
-            : false
-});
-
-// ======================================================
-// DATA FILES
-// ======================================================
-
-const DATA_DIR =
-    path.join(
-        __dirname,
-        "data"
-    );
-
-const USERS_FILE =
-    path.join(
-        DATA_DIR,
-        "users.json"
-    );
-
-const QUESTIONS_FILE =
-    path.join(
-        DATA_DIR,
-        "questions.json"
-    );
-
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(
-        DATA_DIR,
-        {
-            recursive: true
-        }
-    );
-}
-
-// ======================================================
-// ENVIRONMENT
-// ======================================================
+const DATABASE_URL = process.env.DATABASE_URL;
 
 const RESEND_API_KEY =
-    process.env.RESEND_API_KEY;
+    process.env.RESEND_API_KEY || "";
 
 const RESEND_FROM_EMAIL =
     process.env.RESEND_FROM_EMAIL ||
     "onboarding@resend.dev";
 
-const resendConfigured =
-    Boolean(
-        RESEND_API_KEY
-    );
-
 const GEMINI_API_KEY =
-    process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY || "";
 
 const GEMINI_MODEL =
     process.env.GEMINI_MODEL ||
     "gemini-3.5-flash-lite";
 
-let gemini = null;
+const OPENAI_API_KEY =
+    process.env.OPENAI_API_KEY || "";
+
+if (!DATABASE_URL) {
+    console.error("DATABASE_URL is not configured.");
+    process.exit(1);
+}
+
+/*
+========================================================
+SERVICES
+========================================================
+*/
+
+let genAI = null;
 
 if (GEMINI_API_KEY) {
+    genAI = new GoogleGenAI({
+        apiKey: GEMINI_API_KEY
+    });
 
-    gemini =
-        new GoogleGenAI({
-            apiKey:
-                GEMINI_API_KEY
-        });
-
-    console.log(
-        "Gemini AI service configured."
-    );
+    console.log("Gemini AI service configured.");
 } else {
-
-    console.log(
-        "Gemini AI service is not configured."
-    );
+    console.log("Gemini API key not configured.");
 }
 
-if (resendConfigured) {
-
-    console.log(
-        "Resend email service configured."
-    );
+if (RESEND_API_KEY) {
+    console.log("Resend email service configured.");
 } else {
-
-    console.log(
-        "Resend email service is not configured."
-    );
+    console.log("Resend email service not configured.");
 }
 
-// ======================================================
-// OTP CONFIGURATION
-// ======================================================
+/*
+========================================================
+POSTGRESQL
+========================================================
+*/
 
-const OTP_EXPIRY_MS =
-    10 * 60 * 1000;
+const pool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
 
-const RESET_VERIFIED_EXPIRY_MS =
-    10 * 60 * 1000;
+pool.on("error", (error) => {
+    console.error("Unexpected PostgreSQL error:", error);
+});
 
-// ======================================================
-// DATABASE INITIALIZATION
-// ======================================================
+/*
+========================================================
+DATABASE INITIALIZATION
+========================================================
+*/
 
 async function initializeDatabase() {
 
-    console.log(
-        "Initializing PostgreSQL database..."
-    );
+    console.log("Initializing PostgreSQL database...");
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
-            email TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             password_salt TEXT NOT NULL,
             auth_token TEXT,
             reset_otp_hash TEXT,
             reset_otp_expires_at TIMESTAMPTZ,
             reset_otp_verified_until TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
-    `);
-
-    await pool.query(`
-        CREATE UNIQUE INDEX IF NOT EXISTS
-        users_email_unique
-        ON users (LOWER(email))
-    `);
-
-    await pool.query(`
-        CREATE UNIQUE INDEX IF NOT EXISTS
-        users_auth_token_unique
-        ON users (auth_token)
-        WHERE auth_token IS NOT NULL
     `);
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS quiz_results (
-            id TEXT PRIMARY KEY,
-            user_id TEXT,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
             subject TEXT,
             difficulty TEXT,
-            questions JSONB NOT NULL DEFAULT '[]'::jsonb,
-            answers JSONB NOT NULL DEFAULT '[]'::jsonb,
-            score NUMERIC,
-            total_questions INTEGER,
-            correct_answers INTEGER,
-            answer_details JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            questions JSONB,
+            answers JSONB,
+            answer_details JSONB,
+            score INTEGER DEFAULT 0,
+            total_questions INTEGER DEFAULT 0,
+            correct_answers INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
+    /*
+    Add missing columns if an older version of the
+    database already exists.
+    */
+
     await pool.query(`
-        CREATE INDEX IF NOT EXISTS
-        quiz_results_user_id_index
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS reset_otp_hash TEXT
+    `);
+
+    await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS reset_otp_expires_at TIMESTAMPTZ
+    `);
+
+    await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS reset_otp_verified_until TIMESTAMPTZ
+    `);
+
+    await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS auth_token TEXT
+    `);
+
+    await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ
+        DEFAULT CURRENT_TIMESTAMP
+    `);
+
+    await pool.query(`
+        ALTER TABLE quiz_results
+        ADD COLUMN IF NOT EXISTS answer_details JSONB
+    `);
+
+    await pool.query(`
+        ALTER TABLE quiz_results
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ
+        DEFAULT CURRENT_TIMESTAMP
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_email
+        ON users(email)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_auth_token
+        ON users(auth_token)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_quiz_results_user_id
         ON quiz_results(user_id)
     `);
 
-    console.log(
-        "PostgreSQL database initialized successfully."
-    );
+    console.log("PostgreSQL database initialized successfully.");
 }
 
-// ======================================================
-// PASSWORD HASHING
-// ======================================================
+/*
+========================================================
+JSON QUESTION FILE
+========================================================
+*/
 
-function hashPassword(
-    password,
-    salt = crypto
-        .randomBytes(16)
-        .toString("hex")
-) {
+const DATA_DIR =
+    path.join(__dirname, "data");
 
-    const passwordHash =
-        crypto
-            .scryptSync(
-                password,
-                salt,
-                64
-            )
-            .toString("hex");
+const QUESTIONS_FILE =
+    path.join(DATA_DIR, "questions.json");
 
-    return {
-        passwordHash,
-        passwordSalt:
-            salt
-    };
-}
+/*
+========================================================
+FALLBACK QUESTIONS
+========================================================
 
-function verifyPassword(
-    password,
-    passwordHash,
-    passwordSalt
-) {
+These are used only if questions.json is missing,
+empty, or contains no matching questions.
 
-    try {
+This prevents:
 
-        const hash =
-            crypto
-                .scryptSync(
-                    password,
-                    passwordSalt,
-                    64
-                )
-                .toString("hex");
+"Unable to load quiz: No questions found."
+*/
 
-        return crypto.timingSafeEqual(
-            Buffer.from(
-                hash,
-                "hex"
-            ),
-            Buffer.from(
-                passwordHash,
-                "hex"
-            )
-        );
+const FALLBACK_QUESTIONS = [
 
-    } catch {
+    {
+        id: 1,
+        subject: "Mathematics",
+        topic: "Arithmetic",
+        difficulty: "Easy",
+        question: "What is 15 + 27?",
+        optionA: "32",
+        optionB: "42",
+        optionC: "52",
+        optionD: "38",
+        correctAnswer: "B",
+        solution: "15 + 27 = 42."
+    },
 
-        return false;
+    {
+        id: 2,
+        subject: "Mathematics",
+        topic: "Arithmetic",
+        difficulty: "Easy",
+        question: "What is the square of 6?",
+        optionA: "12",
+        optionB: "18",
+        optionC: "36",
+        optionD: "42",
+        correctAnswer: "C",
+        solution: "6 × 6 = 36."
+    },
+
+    {
+        id: 3,
+        subject: "Mathematics",
+        topic: "Arithmetic",
+        difficulty: "Easy",
+        question: "What is 8 × 7?",
+        optionA: "48",
+        optionB: "54",
+        optionC: "56",
+        optionD: "64",
+        correctAnswer: "C",
+        solution: "8 × 7 = 56."
+    },
+
+    {
+        id: 4,
+        subject: "Biology",
+        topic: "Cell",
+        difficulty: "Easy",
+        question: "What is the basic structural and functional unit of life?",
+        optionA: "Tissue",
+        optionB: "Cell",
+        optionC: "Organ",
+        optionD: "Organ system",
+        correctAnswer: "B",
+        solution: "The cell is the basic structural and functional unit of life."
+    },
+
+    {
+        id: 5,
+        subject: "Biology",
+        topic: "Human Body",
+        difficulty: "Easy",
+        question: "Which organ pumps blood throughout the human body?",
+        optionA: "Lungs",
+        optionB: "Brain",
+        optionC: "Heart",
+        optionD: "Kidney",
+        correctAnswer: "C",
+        solution: "The heart pumps blood throughout the human body."
+    },
+
+    {
+        id: 6,
+        subject: "Physics",
+        topic: "Units",
+        difficulty: "Easy",
+        question: "What is the SI unit of force?",
+        optionA: "Joule",
+        optionB: "Newton",
+        optionC: "Watt",
+        optionD: "Pascal",
+        correctAnswer: "B",
+        solution: "The SI unit of force is the Newton."
+    },
+
+    {
+        id: 7,
+        subject: "Chemistry",
+        topic: "Elements",
+        difficulty: "Easy",
+        question: "What is the chemical symbol for oxygen?",
+        optionA: "O",
+        optionB: "Ox",
+        optionC: "C",
+        optionD: "H",
+        correctAnswer: "A",
+        solution: "The chemical symbol for oxygen is O."
     }
-}
-
-// ======================================================
-// TOKEN
-// ======================================================
-
-function createAuthToken() {
-
-    return crypto
-        .randomBytes(32)
-        .toString("hex");
-}
-
-// ======================================================
-// OTP
-// ======================================================
-
-function generateOtp() {
-
-    return Math.floor(
-        100000 +
-        Math.random() * 900000
-    ).toString();
-}
-
-function hashOtp(
-    otp
-) {
-
-    return crypto
-        .createHash("sha256")
-        .update(otp)
-        .digest("hex");
-}
-
-// ======================================================
-// QUESTIONS
-// ======================================================
+];
 
 function loadQuestions() {
 
     try {
 
-        if (
-            !fs.existsSync(
-                QUESTIONS_FILE
-            )
-        ) {
-            return [];
+        if (!fs.existsSync(QUESTIONS_FILE)) {
+            console.log(
+                "questions.json not found. Using fallback questions."
+            );
+
+            return FALLBACK_QUESTIONS;
         }
 
-        const content =
+        const raw =
             fs.readFileSync(
                 QUESTIONS_FILE,
                 "utf8"
-            ).trim();
+            );
 
-        if (!content) {
-            return [];
-        }
+        const parsed =
+            JSON.parse(raw);
 
-        const data =
-            JSON.parse(content);
+        let questions = [];
 
-        if (Array.isArray(data)) {
-            return data;
-        }
-
-        if (
-            data &&
-            Array.isArray(
-                data.questions
-            )
+        if (Array.isArray(parsed)) {
+            questions = parsed;
+        } else if (
+            parsed &&
+            Array.isArray(parsed.questions)
         ) {
-            return data.questions;
+            questions = parsed.questions;
         }
 
-        return [];
+        if (questions.length === 0) {
+            console.log(
+                "questions.json is empty. Using fallback questions."
+            );
+
+            return FALLBACK_QUESTIONS;
+        }
+
+        return questions;
 
     } catch (error) {
 
         console.error(
-            "Unable to load questions:",
-            error
+            "Unable to load questions.json:",
+            error.message
         );
 
-        return [];
+        return FALLBACK_QUESTIONS;
     }
 }
 
-// ======================================================
-// QUIZ ANSWER HELPERS
-// ======================================================
+/*
+========================================================
+QUESTION HELPERS
+========================================================
+*/
 
-function normalizeAnswer(
-    value,
-    question
-) {
+function normalizeAnswer(value, question = {}) {
 
     if (
         value === null ||
@@ -399,54 +411,24 @@ function normalizeAnswer(
     }
 
     const optionName =
-        upper.replace(
-            /\s+/g,
-            ""
-        );
+        upper.replace(/\s+/g, "");
 
-    if (
-        optionName === "OPTIONA"
-    ) {
-        return "A";
-    }
-
-    if (
-        optionName === "OPTIONB"
-    ) {
-        return "B";
-    }
-
-    if (
-        optionName === "OPTIONC"
-    ) {
-        return "C";
-    }
-
-    if (
-        optionName === "OPTIOND"
-    ) {
-        return "D";
-    }
+    if (optionName === "OPTIONA") return "A";
+    if (optionName === "OPTIONB") return "B";
+    if (optionName === "OPTIONC") return "C";
+    if (optionName === "OPTIOND") return "D";
 
     const optionA =
-        String(
-            question?.optionA || ""
-        ).trim();
+        String(question.optionA || "").trim();
 
     const optionB =
-        String(
-            question?.optionB || ""
-        ).trim();
+        String(question.optionB || "").trim();
 
     const optionC =
-        String(
-            question?.optionC || ""
-        ).trim();
+        String(question.optionC || "").trim();
 
     const optionD =
-        String(
-            question?.optionD || ""
-        ).trim();
+        String(question.optionD || "").trim();
 
     if (
         answer.toLowerCase() ===
@@ -479,9 +461,7 @@ function normalizeAnswer(
     return "";
 }
 
-function getCorrectAnswer(
-    question
-) {
+function getCorrectAnswer(question) {
 
     if (!question) {
         return "";
@@ -502,9 +482,7 @@ function getCorrectAnswer(
     );
 }
 
-function getQuestionSolution(
-    question
-) {
+function getQuestionSolution(question) {
 
     if (!question) {
         return "";
@@ -524,10 +502,7 @@ function getOptionText(
     answer
 ) {
 
-    if (
-        !question ||
-        !answer
-    ) {
+    if (!question || !answer) {
         return "";
     }
 
@@ -560,9 +535,168 @@ function getOptionText(
     }
 }
 
-// ======================================================
-// RESEND EMAIL
-// ======================================================
+function shuffleArray(array) {
+
+    const result = [...array];
+
+    for (
+        let i = result.length - 1;
+        i > 0;
+        i--
+    ) {
+
+        const j =
+            Math.floor(
+                Math.random() * (i + 1)
+            );
+
+        [
+            result[i],
+            result[j]
+        ] = [
+            result[j],
+            result[i]
+        ];
+    }
+
+    return result;
+}
+
+/*
+========================================================
+PASSWORD SECURITY
+========================================================
+*/
+
+function hashPassword(password) {
+
+    const salt =
+        crypto.randomBytes(16)
+            .toString("hex");
+
+    const hash =
+        crypto.scryptSync(
+            password,
+            salt,
+            64
+        ).toString("hex");
+
+    return {
+        salt,
+        hash
+    };
+}
+
+function verifyPassword(
+    password,
+    storedHash,
+    storedSalt
+) {
+
+    try {
+
+        const hash =
+            crypto.scryptSync(
+                password,
+                storedSalt,
+                64
+            ).toString("hex");
+
+        return crypto.timingSafeEqual(
+            Buffer.from(hash, "hex"),
+            Buffer.from(storedHash, "hex")
+        );
+
+    } catch (error) {
+
+        return false;
+    }
+}
+
+/*
+========================================================
+TOKEN / OTP HELPERS
+========================================================
+*/
+
+function generateToken() {
+
+    return crypto
+        .randomBytes(32)
+        .toString("hex");
+}
+
+function generateOTP() {
+
+    return String(
+        Math.floor(
+            100000 +
+            Math.random() * 900000
+        )
+    );
+}
+
+function hashOTP(otp) {
+
+    return crypto
+        .createHash("sha256")
+        .update(otp)
+        .digest("hex");
+}
+
+/*
+========================================================
+AUTHENTICATED USER
+========================================================
+*/
+
+async function getAuthenticatedUser(req) {
+
+    const authorization =
+        req.headers.authorization || "";
+
+    if (
+        !authorization.startsWith(
+            "Bearer "
+        )
+    ) {
+        return null;
+    }
+
+    const token =
+        authorization.substring(7).trim();
+
+    if (!token) {
+        return null;
+    }
+
+    const result =
+        await pool.query(
+            `
+            SELECT
+                id,
+                name,
+                email,
+                created_at
+            FROM users
+            WHERE auth_token = $1
+            LIMIT 1
+            `,
+            [token]
+        );
+
+    if (result.rows.length === 0) {
+        return null;
+    }
+
+    return result.rows[0];
+}
+
+/*
+========================================================
+RESEND EMAIL
+========================================================
+*/
 
 async function sendPasswordResetOTP(
     email,
@@ -570,7 +704,6 @@ async function sendPasswordResetOTP(
 ) {
 
     if (!RESEND_API_KEY) {
-
         throw new Error(
             "Resend email service is not configured."
         );
@@ -583,11 +716,11 @@ async function sendPasswordResetOTP(
                 method: "POST",
 
                 headers: {
-                    "Content-Type":
-                        "application/json",
-
                     "Authorization":
-                        `Bearer ${RESEND_API_KEY}`
+                        `Bearer ${RESEND_API_KEY}`,
+
+                    "Content-Type":
+                        "application/json"
                 },
 
                 body: JSON.stringify({
@@ -595,9 +728,7 @@ async function sendPasswordResetOTP(
                     from:
                         RESEND_FROM_EMAIL,
 
-                    to: [
-                        email
-                    ],
+                    to: [email],
 
                     subject:
                         "Study Buddy AI - Password Reset OTP",
@@ -606,18 +737,13 @@ async function sendPasswordResetOTP(
                         <div style="
                             font-family: Arial, sans-serif;
                             max-width: 600px;
-                            margin: 0 auto;
+                            margin: auto;
                             padding: 20px;
                         ">
 
                             <h2>
                                 Study Buddy AI
                             </h2>
-
-                            <p>
-                                We received a request
-                                to reset your password.
-                            </p>
 
                             <p>
                                 Your password reset OTP is:
@@ -627,25 +753,20 @@ async function sendPasswordResetOTP(
                                 font-size: 32px;
                                 font-weight: bold;
                                 letter-spacing: 8px;
-                                margin: 25px 0;
+                                margin: 20px 0;
                             ">
                                 ${otp}
                             </div>
 
                             <p>
-                                This OTP is valid for
+                                This OTP will expire in
                                 10 minutes.
                             </p>
 
                             <p>
                                 If you did not request
-                                a password reset, you can
-                                safely ignore this email.
-                            </p>
-
-                            <p>
-                                Regards,<br>
-                                Study Buddy AI
+                                a password reset, you
+                                can safely ignore this email.
                             </p>
 
                         </div>
@@ -654,118 +775,45 @@ async function sendPasswordResetOTP(
             }
         );
 
-    const text =
-        await response.text();
-
     if (!response.ok) {
 
-        console.error(
-            "Resend API error:",
-            response.status,
-            text
-        );
+        const errorText =
+            await response.text();
 
         throw new Error(
-            `Resend API error: ${response.status}`
+            `Resend API error: ${errorText}`
         );
     }
 
-    return text;
+    return true;
 }
 
-// ======================================================
-// AUTH TOKEN
-// ======================================================
+/*
+========================================================
+ROOT
+========================================================
+*/
 
-function getTokenFromRequest(
-    req
-) {
+app.get("/", (req, res) => {
 
-    const header =
-        req.headers.authorization;
+    res.json({
+        success: true,
+        message:
+            "Study Buddy AI server is running.",
+        database:
+            "PostgreSQL",
+        gemini:
+            Boolean(GEMINI_API_KEY),
+        resend:
+            Boolean(RESEND_API_KEY)
+    });
+});
 
-    if (
-        !header ||
-        !header.startsWith(
-            "Bearer "
-        )
-    ) {
-        return null;
-    }
-
-    return header
-        .substring(7)
-        .trim();
-}
-
-async function getAuthenticatedUser(
-    req
-) {
-
-    const token =
-        getTokenFromRequest(
-            req
-        );
-
-    if (!token) {
-        return null;
-    }
-
-    const result =
-        await pool.query(
-            `
-            SELECT *
-            FROM users
-            WHERE auth_token = $1
-            LIMIT 1
-            `,
-            [
-                token
-            ]
-        );
-
-    if (
-        result.rows.length === 0
-    ) {
-        return null;
-    }
-
-    return result.rows[0];
-}
-
-// ======================================================
-// HOME
-// ======================================================
-
-app.get(
-    "/",
-    (req, res) => {
-
-        res.json({
-
-            success:
-                true,
-
-            message:
-                "Study Buddy AI server is running.",
-
-            database:
-                "PostgreSQL",
-
-            gemini:
-                Boolean(
-                    GEMINI_API_KEY
-                ),
-
-            resend:
-                resendConfigured
-        });
-    }
-);
-
-// ======================================================
-// HEALTH
-// ======================================================
+/*
+========================================================
+HEALTH
+========================================================
+*/
 
 app.get(
     "/health",
@@ -778,42 +826,34 @@ app.get(
             );
 
             res.json({
-
-                success:
-                    true,
-
-                status:
-                    "healthy",
-
+                success: true,
+                status: "healthy",
                 database:
-                    "connected"
+                    "PostgreSQL connected"
             });
 
         } catch (error) {
 
             console.error(
-                "Health database error:",
+                "Health check error:",
                 error
             );
 
             res.status(500).json({
-
-                success:
-                    false,
-
-                status:
-                    "unhealthy",
-
+                success: false,
+                status: "unhealthy",
                 database:
-                    "disconnected"
+                    "PostgreSQL connection failed"
             });
         }
     }
 );
 
-// ======================================================
-// SIGN UP
-// ======================================================
+/*
+========================================================
+SIGN UP
+========================================================
+*/
 
 app.post(
     "/api/auth/signup",
@@ -824,94 +864,55 @@ app.post(
             const {
                 name,
                 email,
-                password,
-                confirmPassword
+                password
             } = req.body || {};
 
-            if (
-                !name ||
-                !email ||
-                !password ||
-                !confirmPassword
-            ) {
-
-                return res.status(400).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "All fields are required."
-                });
-            }
-
             const cleanName =
-                String(name).trim();
+                String(name || "").trim();
 
             const cleanEmail =
-                String(email)
+                String(email || "")
                     .trim()
                     .toLowerCase();
+
+            const cleanPassword =
+                String(password || "");
 
             if (!cleanName) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "Name is required."
+                        "Please enter your name."
                 });
             }
 
-            if (
-                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/
-                    .test(cleanEmail)
-            ) {
+            if (!cleanEmail) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "Enter a valid email."
+                        "Please enter your email."
                 });
             }
 
-            if (
-                String(password).length < 6
-            ) {
+            if (!cleanPassword) {
 
                 return res.status(400).json({
+                    success: false,
+                    message:
+                        "Please enter your password."
+                });
+            }
 
-                    success:
-                        false,
+            if (cleanPassword.length < 6) {
 
+                return res.status(400).json({
+                    success: false,
                     message:
                         "Password must contain at least 6 characters."
                 });
             }
-
-            if (
-                password !==
-                confirmPassword
-            ) {
-
-                return res.status(400).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "Passwords do not match."
-                });
-            }
-
-            // ==========================================
-            // CHECK EXISTING USER
-            // ==========================================
 
             const existingUser =
                 await pool.query(
@@ -921,9 +922,7 @@ app.post(
                     WHERE LOWER(email) = LOWER($1)
                     LIMIT 1
                     `,
-                    [
-                        cleanEmail
-                    ]
+                    [cleanEmail]
                 );
 
             if (
@@ -931,75 +930,58 @@ app.post(
             ) {
 
                 return res.status(409).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Account already exists. Please sign in."
                 });
             }
 
             const {
-                passwordHash,
-                passwordSalt
+                salt,
+                hash
             } =
                 hashPassword(
-                    password
+                    cleanPassword
                 );
 
-            const userId =
-                crypto.randomUUID();
+            const result =
+                await pool.query(
+                    `
+                    INSERT INTO users
+                    (
+                        name,
+                        email,
+                        password_hash,
+                        password_salt
+                    )
+                    VALUES
+                    ($1, $2, $3, $4)
+                    RETURNING
+                        id,
+                        name,
+                        email,
+                        created_at
+                    `,
+                    [
+                        cleanName,
+                        cleanEmail,
+                        hash,
+                        salt
+                    ]
+                );
 
-            await pool.query(
-                `
-                INSERT INTO users (
-                    id,
-                    name,
-                    email,
-                    password_hash,
-                    password_salt
-                )
-                VALUES (
-                    $1,
-                    $2,
-                    $3,
-                    $4,
-                    $5
-                )
-                `,
-                [
-                    userId,
-                    cleanName,
-                    cleanEmail,
-                    passwordHash,
-                    passwordSalt
-                ]
-            );
+            const user =
+                result.rows[0];
 
             console.log(
-                `New PostgreSQL user registered: ${cleanEmail}`
+                `New user registered: ${user.email}`
             );
 
             return res.status(201).json({
-
-                success:
-                    true,
-
+                success: true,
                 message:
                     "Account created successfully.",
-
-                user: {
-
-                    id:
-                        userId,
-
-                    name:
-                        cleanName,
-
-                    email:
-                        cleanEmail
-                }
+                user
             });
 
         } catch (error) {
@@ -1014,30 +996,26 @@ app.post(
             ) {
 
                 return res.status(409).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Account already exists. Please sign in."
                 });
             }
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to create account. Please try again."
+                    "Unable to create account."
             });
         }
     }
 );
 
-// ======================================================
-// SIGN IN
-// ======================================================
+/*
+========================================================
+SIGN IN
+========================================================
+*/
 
 app.post(
     "/api/auth/signin",
@@ -1050,37 +1028,47 @@ app.post(
                 password
             } = req.body || {};
 
-            if (
-                !email ||
-                !password
-            ) {
+            const cleanEmail =
+                String(email || "")
+                    .trim()
+                    .toLowerCase();
+
+            const cleanPassword =
+                String(password || "");
+
+            if (!cleanEmail) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "Email and password are required."
+                        "Please enter your email."
                 });
             }
 
-            const cleanEmail =
-                String(email)
-                    .trim()
-                    .toLowerCase();
+            if (!cleanPassword) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Please enter your password."
+                });
+            }
 
             const result =
                 await pool.query(
                     `
-                    SELECT *
+                    SELECT
+                        id,
+                        name,
+                        email,
+                        password_hash,
+                        password_salt,
+                        created_at
                     FROM users
                     WHERE LOWER(email) = LOWER($1)
                     LIMIT 1
                     `,
-                    [
-                        cleanEmail
-                    ]
+                    [cleanEmail]
                 );
 
             if (
@@ -1088,10 +1076,7 @@ app.post(
             ) {
 
                 return res.status(401).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Incorrect email or password."
                 });
@@ -1100,27 +1085,24 @@ app.post(
             const user =
                 result.rows[0];
 
-            const validPassword =
+            const passwordCorrect =
                 verifyPassword(
-                    password,
+                    cleanPassword,
                     user.password_hash,
                     user.password_salt
                 );
 
-            if (!validPassword) {
+            if (!passwordCorrect) {
 
                 return res.status(401).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Incorrect email or password."
                 });
             }
 
-            const token =
-                createAuthToken();
+            const authToken =
+                generateToken();
 
             await pool.query(
                 `
@@ -1129,31 +1111,27 @@ app.post(
                 WHERE id = $2
                 `,
                 [
-                    token,
+                    authToken,
                     user.id
                 ]
             );
 
             return res.json({
 
-                success:
-                    true,
+                success: true,
 
                 message:
                     "Sign in successful.",
 
-                token,
+                token:
+                    authToken,
 
                 user: {
-
-                    id:
-                        user.id,
-
-                    name:
-                        user.name,
-
-                    email:
-                        user.email
+                    id: user.id,
+                    name: user.name,
+                    email: user.email,
+                    created_at:
+                        user.created_at
                 }
             });
 
@@ -1165,20 +1143,19 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to sign in. Please try again."
+                    "Unable to sign in."
             });
         }
     }
 );
 
-// ======================================================
-// CURRENT USER
-// ======================================================
+/*
+========================================================
+GET CURRENT USER
+========================================================
+*/
 
 app.get(
     "/api/auth/me",
@@ -1194,31 +1171,15 @@ app.get(
             if (!user) {
 
                 return res.status(401).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "Unauthorized."
+                        "Authentication required."
                 });
             }
 
             return res.json({
-
-                success:
-                    true,
-
-                user: {
-
-                    id:
-                        user.id,
-
-                    name:
-                        user.name,
-
-                    email:
-                        user.email
-                }
+                success: true,
+                user
             });
 
         } catch (error) {
@@ -1229,10 +1190,7 @@ app.get(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
                     "Unable to get user."
             });
@@ -1240,9 +1198,11 @@ app.get(
     }
 );
 
-// ======================================================
-// LOGOUT
-// ======================================================
+/*
+========================================================
+LOGOUT
+========================================================
+*/
 
 app.post(
     "/api/auth/logout",
@@ -1250,32 +1210,37 @@ app.post(
 
         try {
 
-            const token =
-                getTokenFromRequest(
-                    req
-                );
+            const authorization =
+                req.headers.authorization || "";
 
-            if (token) {
+            if (
+                authorization.startsWith(
+                    "Bearer "
+                )
+            ) {
 
-                await pool.query(
-                    `
-                    UPDATE users
-                    SET auth_token = NULL
-                    WHERE auth_token = $1
-                    `,
-                    [
-                        token
-                    ]
-                );
+                const token =
+                    authorization
+                        .substring(7)
+                        .trim();
+
+                if (token) {
+
+                    await pool.query(
+                        `
+                        UPDATE users
+                        SET auth_token = NULL
+                        WHERE auth_token = $1
+                        `,
+                        [token]
+                    );
+                }
             }
 
             return res.json({
-
-                success:
-                    true,
-
+                success: true,
                 message:
-                    "Signed out successfully."
+                    "Logged out successfully."
             });
 
         } catch (error) {
@@ -1286,20 +1251,19 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to sign out."
+                    "Unable to logout."
             });
         }
     }
 );
 
-// ======================================================
-// FORGOT PASSWORD
-// ======================================================
+/*
+========================================================
+FORGOT PASSWORD
+========================================================
+*/
 
 app.post(
     "/api/auth/forgot-password",
@@ -1311,34 +1275,29 @@ app.post(
                 email
             } = req.body || {};
 
-            if (!email) {
-
-                return res.status(400).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "Email is required."
-                });
-            }
-
             const cleanEmail =
-                String(email)
+                String(email || "")
                     .trim()
                     .toLowerCase();
+
+            if (!cleanEmail) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Please enter your email."
+                });
+            }
 
             const result =
                 await pool.query(
                     `
-                    SELECT *
+                    SELECT id, email
                     FROM users
                     WHERE LOWER(email) = LOWER($1)
                     LIMIT 1
                     `,
-                    [
-                        cleanEmail
-                    ]
+                    [cleanEmail]
                 );
 
             if (
@@ -1346,45 +1305,26 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "No account found with this email."
                 });
             }
 
-            if (!resendConfigured) {
-
-                return res.status(500).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "Password reset email service is not configured."
-                });
-            }
+            const user =
+                result.rows[0];
 
             const otp =
-                generateOtp();
+                generateOTP();
 
             const otpHash =
-                hashOtp(
-                    otp
-                );
+                hashOTP(otp);
 
             const expiresAt =
                 new Date(
                     Date.now() +
-                    OTP_EXPIRY_MS
+                    10 * 60 * 1000
                 );
-
-            await sendPasswordResetOTP(
-                cleanEmail,
-                otp
-            );
 
             await pool.query(
                 `
@@ -1398,17 +1338,23 @@ app.post(
                 [
                     otpHash,
                     expiresAt,
-                    result.rows[0].id
+                    user.id
                 ]
             );
 
+            await sendPasswordResetOTP(
+                user.email,
+                otp
+            );
+
+            console.log(
+                `Password reset OTP sent to ${user.email}`
+            );
+
             return res.json({
-
-                success:
-                    true,
-
+                success: true,
                 message:
-                    "OTP sent successfully."
+                    "OTP sent to your email."
             });
 
         } catch (error) {
@@ -1419,20 +1365,19 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to send OTP. Please try again."
+                    "Unable to send password reset OTP."
             });
         }
     }
 );
 
-// ======================================================
-// VERIFY RESET OTP
-// ======================================================
+/*
+========================================================
+VERIFY RESET OTP
+========================================================
+*/
 
 app.post(
     "/api/auth/verify-reset-otp",
@@ -1445,37 +1390,36 @@ app.post(
                 otp
             } = req.body || {};
 
-            if (
-                !email ||
-                !otp
-            ) {
+            const cleanEmail =
+                String(email || "")
+                    .trim()
+                    .toLowerCase();
+
+            const cleanOTP =
+                String(otp || "")
+                    .trim();
+
+            if (!cleanEmail || !cleanOTP) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Email and OTP are required."
                 });
             }
 
-            const cleanEmail =
-                String(email)
-                    .trim()
-                    .toLowerCase();
-
             const result =
                 await pool.query(
                     `
-                    SELECT *
+                    SELECT
+                        id,
+                        reset_otp_hash,
+                        reset_otp_expires_at
                     FROM users
                     WHERE LOWER(email) = LOWER($1)
                     LIMIT 1
                     `,
-                    [
-                        cleanEmail
-                    ]
+                    [cleanEmail]
                 );
 
             if (
@@ -1483,10 +1427,7 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "No account found."
                 });
@@ -1501,12 +1442,9 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "OTP not found. Please request a new OTP."
+                        "No active OTP found."
                 });
             }
 
@@ -1517,46 +1455,23 @@ app.post(
                 Date.now()
             ) {
 
-                await pool.query(
-                    `
-                    UPDATE users
-                    SET
-                        reset_otp_hash = NULL,
-                        reset_otp_expires_at = NULL
-                    WHERE id = $1
-                    `,
-                    [
-                        user.id
-                    ]
-                );
-
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "OTP has expired. Please request a new OTP."
                 });
             }
 
-            const submittedOtpHash =
-                hashOtp(
-                    String(
-                        otp
-                    ).trim()
-                );
+            const otpHash =
+                hashOTP(cleanOTP);
 
             if (
-                submittedOtpHash !==
+                otpHash !==
                 user.reset_otp_hash
             ) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Invalid OTP."
                 });
@@ -1565,13 +1480,14 @@ app.post(
             const verifiedUntil =
                 new Date(
                     Date.now() +
-                    RESET_VERIFIED_EXPIRY_MS
+                    15 * 60 * 1000
                 );
 
             await pool.query(
                 `
                 UPDATE users
-                SET reset_otp_verified_until = $1
+                SET
+                    reset_otp_verified_until = $1
                 WHERE id = $2
                 `,
                 [
@@ -1581,10 +1497,7 @@ app.post(
             );
 
             return res.json({
-
-                success:
-                    true,
-
+                success: true,
                 message:
                     "OTP verified successfully."
             });
@@ -1597,10 +1510,7 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
                     "Unable to verify OTP."
             });
@@ -1608,9 +1518,11 @@ app.post(
     }
 );
 
-// ======================================================
-// RESET PASSWORD
-// ======================================================
+/*
+========================================================
+RESET PASSWORD
+========================================================
+*/
 
 app.post(
     "/api/auth/reset-password",
@@ -1620,73 +1532,48 @@ app.post(
 
             const {
                 email,
-                newPassword,
-                confirmPassword
+                password
             } = req.body || {};
 
-            if (
-                !email ||
-                !newPassword ||
-                !confirmPassword
-            ) {
+            const cleanEmail =
+                String(email || "")
+                    .trim()
+                    .toLowerCase();
+
+            const cleanPassword =
+                String(password || "");
+
+            if (!cleanEmail) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "All fields are required."
+                        "Email is required."
                 });
             }
 
             if (
-                String(
-                    newPassword
-                ).length < 6
+                cleanPassword.length < 6
             ) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "Password must contain at least 6 characters."
                 });
             }
 
-            if (
-                newPassword !==
-                confirmPassword
-            ) {
-
-                return res.status(400).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "Passwords do not match."
-                });
-            }
-
-            const cleanEmail =
-                String(email)
-                    .trim()
-                    .toLowerCase();
-
             const result =
                 await pool.query(
                     `
-                    SELECT *
+                    SELECT
+                        id,
+                        reset_otp_verified_until
                     FROM users
                     WHERE LOWER(email) = LOWER($1)
                     LIMIT 1
                     `,
-                    [
-                        cleanEmail
-                    ]
+                    [cleanEmail]
                 );
 
             if (
@@ -1694,10 +1581,7 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
                         "No account found."
                 });
@@ -1715,21 +1599,18 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "OTP verification expired. Please request a new OTP."
+                        "Please verify the OTP first."
                 });
             }
 
             const {
-                passwordHash,
-                passwordSalt
+                salt,
+                hash
             } =
                 hashPassword(
-                    newPassword
+                    cleanPassword
                 );
 
             await pool.query(
@@ -1738,24 +1619,21 @@ app.post(
                 SET
                     password_hash = $1,
                     password_salt = $2,
+                    auth_token = NULL,
                     reset_otp_hash = NULL,
                     reset_otp_expires_at = NULL,
-                    reset_otp_verified_until = NULL,
-                    auth_token = NULL
+                    reset_otp_verified_until = NULL
                 WHERE id = $3
                 `,
                 [
-                    passwordHash,
-                    passwordSalt,
+                    hash,
+                    salt,
                     user.id
                 ]
             );
 
             return res.json({
-
-                success:
-                    true,
-
+                success: true,
                 message:
                     "Password reset successfully."
             });
@@ -1768,10 +1646,7 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
                     "Unable to reset password."
             });
@@ -1779,13 +1654,15 @@ app.post(
     }
 );
 
-// ======================================================
-// QUIZ QUESTIONS
-// ======================================================
+/*
+========================================================
+QUIZ QUESTIONS
+========================================================
+*/
 
 app.get(
     "/api/quiz/questions",
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -1798,155 +1675,191 @@ app.get(
             let questions =
                 loadQuestions();
 
-            // ==========================================
-            // SUBJECT
-            // ==========================================
+            const requestedSubject =
+                String(
+                    subject || ""
+                ).trim();
+
+            const requestedDifficulty =
+                String(
+                    difficulty || ""
+                ).trim();
+
+            /*
+            Subject filtering
+            */
 
             if (
-                subject &&
-                String(subject).trim()
+                requestedSubject &&
+                requestedSubject.toLowerCase() !==
+                "all"
             ) {
-
-                const requestedSubject =
-                    String(subject)
-                        .trim()
-                        .toLowerCase();
 
                 questions =
                     questions.filter(
                         question =>
                             String(
-                                question.subject ||
-                                ""
-                            )
-                                .trim()
-                                .toLowerCase() ===
-                            requestedSubject
+                                question.subject || ""
+                            ).toLowerCase() ===
+                            requestedSubject.toLowerCase()
                     );
             }
 
-            // ==========================================
-            // DIFFICULTY
-            //
-            // ALL = NO DIFFICULTY FILTER
-            // ==========================================
+            /*
+            Difficulty filtering
+            */
 
             if (
-                difficulty &&
-                String(difficulty).trim() &&
-                String(difficulty)
-                    .trim()
-                    .toLowerCase() !== "all"
+                requestedDifficulty &&
+                requestedDifficulty.toLowerCase() !==
+                "all"
             ) {
-
-                const requestedDifficulty =
-                    String(difficulty)
-                        .trim()
-                        .toLowerCase();
 
                 questions =
                     questions.filter(
                         question =>
                             String(
-                                question.difficulty ||
-                                ""
-                            )
-                                .trim()
-                                .toLowerCase() ===
-                            requestedDifficulty
+                                question.difficulty || ""
+                            ).toLowerCase() ===
+                            requestedDifficulty.toLowerCase()
                     );
             }
 
-            // ==========================================
-            // SHUFFLE
-            // ==========================================
+            /*
+            If no matching questions were found,
+            try fallback questions.
+            */
 
-            questions =
-                [...questions].sort(
-                    () =>
-                        Math.random() -
-                        0.5
+            if (
+                questions.length === 0
+            ) {
+
+                questions =
+                    FALLBACK_QUESTIONS;
+
+                if (
+                    requestedSubject &&
+                    requestedSubject.toLowerCase() !==
+                    "all"
+                ) {
+
+                    questions =
+                        questions.filter(
+                            question =>
+                                String(
+                                    question.subject || ""
+                                ).toLowerCase() ===
+                                requestedSubject.toLowerCase()
+                        );
+                }
+
+                if (
+                    requestedDifficulty &&
+                    requestedDifficulty.toLowerCase() !==
+                    "all"
+                ) {
+
+                    questions =
+                        questions.filter(
+                            question =>
+                                String(
+                                    question.difficulty || ""
+                                ).toLowerCase() ===
+                                requestedDifficulty.toLowerCase()
+                        );
+                }
+            }
+
+            if (
+                questions.length === 0
+            ) {
+
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "No questions found."
+                });
+            }
+
+            const shuffled =
+                shuffleArray(
+                    questions
                 );
-
-            // ==========================================
-            // COUNT
-            // ==========================================
 
             let requestedCount =
                 parseInt(
-                    count,
+                    count || "5",
                     10
                 );
 
             if (
-                !Number.isInteger(
+                !Number.isFinite(
                     requestedCount
                 ) ||
-                requestedCount <= 0
+                requestedCount < 1
             ) {
-
-                requestedCount =
-                    10;
+                requestedCount = 5;
             }
 
-            questions =
-                questions.slice(
+            requestedCount =
+                Math.min(
+                    requestedCount,
+                    shuffled.length
+                );
+
+            const selected =
+                shuffled.slice(
                     0,
                     requestedCount
                 );
 
-            // ==========================================
-            // HIDE ANSWERS
-            // ==========================================
+            /*
+            NEVER send the correct answer
+            to the Android app before the
+            user answers.
+            */
 
             const safeQuestions =
-                questions.map(
+                selected.map(
                     question => {
 
                         const safeQuestion = {
-                            ...question
-                        };
+                            id:
+                                question.id,
 
-                        delete safeQuestion.correctAnswer;
-                        delete safeQuestion.correct_answer;
-                        delete safeQuestion.correctOption;
-                        delete safeQuestion.correct_option;
-                        delete safeQuestion.answer;
-                        delete safeQuestion.correct;
-                        delete safeQuestion.solution;
-                        delete safeQuestion.explanation;
-                        delete safeQuestion.answerExplanation;
-                        delete safeQuestion.answer_explanation;
+                            subject:
+                                question.subject || "",
+
+                            topic:
+                                question.topic || "",
+
+                            difficulty:
+                                question.difficulty || "",
+
+                            question:
+                                question.question || "",
+
+                            optionA:
+                                question.optionA || "",
+
+                            optionB:
+                                question.optionB || "",
+
+                            optionC:
+                                question.optionC || "",
+
+                            optionD:
+                                question.optionD || ""
+                        };
 
                         return safeQuestion;
                     }
                 );
 
-            if (
-                safeQuestions.length === 0
-            ) {
-
-                return res.status(404).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "No questions found.",
-
-                    questions:
-                        []
-                });
-            }
-
             return res.json({
-
-                success:
-                    true,
-
+                success: true,
                 count:
                     safeQuestions.length,
-
                 questions:
                     safeQuestions
             });
@@ -1954,15 +1867,12 @@ app.get(
         } catch (error) {
 
             console.error(
-                "Get quiz questions error:",
+                "Quiz questions error:",
                 error
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
                     "Unable to load quiz questions."
             });
@@ -1970,9 +1880,34 @@ app.get(
     }
 );
 
-// ======================================================
-// QUIZ SUBMIT
-// ======================================================
+/*
+========================================================
+QUIZ SUBMIT
+========================================================
+
+Supports BOTH:
+
+1. Single question answer:
+
+{
+    questionId: 1,
+    selectedAnswer: "B"
+}
+
+2. Complete quiz result:
+
+{
+    userId: 1,
+    subject: "Biology",
+    difficulty: "Easy",
+    questions: [...],
+    answers: [...],
+    score: 4,
+    totalQuestions: 5,
+    correctAnswers: 4
+}
+========================================================
+*/
 
 app.post(
     "/api/quiz/submit",
@@ -1983,9 +1918,11 @@ app.post(
             const body =
                 req.body || {};
 
-            // ==========================================
-            // SINGLE QUESTION ANSWER
-            // ==========================================
+            /*
+            ================================================
+            SINGLE QUESTION MODE
+            ================================================
+            */
 
             if (
                 body.questionId !== undefined &&
@@ -1993,38 +1930,65 @@ app.post(
             ) {
 
                 const questionId =
-                    String(
+                    Number(
                         body.questionId
                     );
+
+                const selectedAnswer =
+                    String(
+                        body.selectedAnswer || ""
+                    ).trim();
+
+                if (
+                    !Number.isFinite(
+                        questionId
+                    )
+                ) {
+
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Invalid question ID."
+                    });
+                }
 
                 const questions =
                     loadQuestions();
 
-                const question =
+                let question =
                     questions.find(
                         item =>
-                            item &&
-                            String(
-                                item.id
-                            ) ===
+                            Number(item.id) ===
                             questionId
                     );
+
+                /*
+                Search fallback questions
+                if question isn't found.
+                */
+
+                if (!question) {
+
+                    question =
+                        FALLBACK_QUESTIONS.find(
+                            item =>
+                                Number(item.id) ===
+                                questionId
+                        );
+                }
 
                 if (!question) {
 
                     return res.status(404).json({
-
-                        success:
-                            false,
-
+                        success: false,
                         message:
                             "Question not found."
                     });
                 }
 
-                const selectedAnswer =
+                const normalizedSelected =
                     normalizeAnswer(
-                        body.selectedAnswer,
+                        selectedAnswer,
                         question
                     );
 
@@ -2034,10 +1998,22 @@ app.post(
                     );
 
                 const isCorrect =
-                    selectedAnswer !== "" &&
+                    normalizedSelected !== "" &&
                     correctAnswer !== "" &&
-                    selectedAnswer ===
-                        correctAnswer;
+                    normalizedSelected ===
+                    correctAnswer;
+
+                const selectedOption =
+                    getOptionText(
+                        question,
+                        normalizedSelected
+                    );
+
+                const correctOption =
+                    getOptionText(
+                        question,
+                        correctAnswer
+                    );
 
                 const solution =
                     getQuestionSolution(
@@ -2046,32 +2022,25 @@ app.post(
 
                 return res.json({
 
-                    success:
-                        true,
-
-                    correct:
-                        isCorrect,
+                    success: true,
 
                     questionId:
                         question.id,
 
                     selectedAnswer:
-                        selectedAnswer,
+                        normalizedSelected,
 
                     selectedOption:
-                        getOptionText(
-                            question,
-                            selectedAnswer
-                        ),
+                        selectedOption,
+
+                    correct:
+                        isCorrect,
 
                     correctAnswer:
                         correctAnswer,
 
                     correctOption:
-                        getOptionText(
-                            question,
-                            correctAnswer
-                        ),
+                        correctOption,
 
                     solution:
                         solution,
@@ -2081,281 +2050,236 @@ app.post(
                 });
             }
 
-            // ==========================================
-            // COMPLETE QUIZ
-            // ==========================================
+            /*
+            ================================================
+            COMPLETE QUIZ RESULT MODE
+            ================================================
+            */
 
             const {
                 userId,
                 subject,
                 difficulty,
-                questions:
-                    submittedQuestions,
-                answers,
-                score,
-                totalQuestions,
-                correctAnswers
+                questions,
+                answers
             } = body;
+
+            let quizQuestions =
+                Array.isArray(
+                    questions
+                )
+                    ? questions
+                    : [];
+
+            let quizAnswers =
+                Array.isArray(
+                    answers
+                )
+                    ? answers
+                    : [];
+
+            let correctAnswers = 0;
+
+            const answerDetails = [];
 
             const allQuestions =
                 loadQuestions();
 
-            let calculatedCorrectAnswers =
-                0;
-
-            const answerDetails =
-                [];
-
-            if (
-                Array.isArray(
-                    submittedQuestions
-                )
+            for (
+                let i = 0;
+                i < quizQuestions.length;
+                i++
             ) {
 
-                submittedQuestions.forEach(
-                    (
-                        submittedQuestion,
-                        index
-                    ) => {
+                const submittedQuestion =
+                    quizQuestions[i];
 
-                        if (
-                            !submittedQuestion
-                        ) {
-                            return;
-                        }
-
-                        const questionId =
-                            String(
-                                submittedQuestion.id
-                            );
-
-                        const serverQuestion =
-                            allQuestions.find(
-                                item =>
-                                    item &&
-                                    String(
-                                        item.id
-                                    ) ===
-                                    questionId
-                            );
-
-                        if (!serverQuestion) {
-                            return;
-                        }
-
-                        let userAnswer =
-                            "";
-
-                        if (
-                            Array.isArray(
-                                answers
-                            )
-                        ) {
-
-                            if (
-                                answers[index] &&
-                                typeof answers[index] ===
-                                    "object"
-                            ) {
-
-                                userAnswer =
-                                    answers[index].selectedAnswer ||
-                                    answers[index].answer ||
-                                    "";
-
-                            } else if (
-                                typeof answers[index] ===
-                                    "string"
-                            ) {
-
-                                userAnswer =
-                                    answers[index];
-                            }
-                        }
-
-                        const normalizedUserAnswer =
-                            normalizeAnswer(
-                                userAnswer,
-                                serverQuestion
-                            );
-
-                        const correctAnswer =
-                            getCorrectAnswer(
-                                serverQuestion
-                            );
-
-                        const isCorrect =
-                            normalizedUserAnswer !== "" &&
-                            correctAnswer !== "" &&
-                            normalizedUserAnswer ===
-                                correctAnswer;
-
-                        if (isCorrect) {
-                            calculatedCorrectAnswers++;
-                        }
-
-                        answerDetails.push({
-
-                            questionId:
-                                serverQuestion.id,
-
-                            selectedAnswer:
-                                normalizedUserAnswer,
-
-                            selectedOption:
-                                getOptionText(
-                                    serverQuestion,
-                                    normalizedUserAnswer
-                                ),
-
-                            correctAnswer:
-                                correctAnswer,
-
-                            correctOption:
-                                getOptionText(
-                                    serverQuestion,
-                                    correctAnswer
-                                ),
-
-                            correct:
-                                isCorrect,
-
-                            solution:
-                                getQuestionSolution(
-                                    serverQuestion
-                                )
-                        });
-                    }
-                );
-            }
-
-            const finalCorrectAnswers =
-                answerDetails.length > 0
-                    ? calculatedCorrectAnswers
-                    : Number(
-                        correctAnswers
-                    ) || 0;
-
-            const finalTotalQuestions =
-                Number(
-                    totalQuestions
-                ) ||
-                (
-                    Array.isArray(
-                        submittedQuestions
-                    )
-                        ? submittedQuestions.length
-                        : 0
-                );
-
-            let finalScore =
-                Number(
-                    score
-                );
-
-            if (
-                !Number.isFinite(
-                    finalScore
-                )
-            ) {
-
-                finalScore =
-                    finalTotalQuestions > 0
-                        ? (
-                            finalCorrectAnswers /
-                            finalTotalQuestions
-                        ) * 100
-                        : 0;
-            }
-
-            const resultId =
-                crypto.randomUUID();
-
-            await pool.query(
-                `
-                INSERT INTO quiz_results (
-                    id,
-                    user_id,
-                    subject,
-                    difficulty,
-                    questions,
-                    answers,
-                    score,
-                    total_questions,
-                    correct_answers,
-                    answer_details
-                )
-                VALUES (
-                    $1,
-                    $2,
-                    $3,
-                    $4,
-                    $5::jsonb,
-                    $6::jsonb,
-                    $7,
-                    $8,
-                    $9,
-                    $10::jsonb
-                )
-                `,
-                [
-                    resultId,
-                    userId || null,
-                    subject || "",
-                    difficulty || "",
-                    JSON.stringify(
-                        submittedQuestions || []
-                    ),
-                    JSON.stringify(
-                        answers || []
-                    ),
+                const questionId =
                     Number(
-                        finalScore.toFixed(2)
-                    ),
-                    finalTotalQuestions,
-                    finalCorrectAnswers,
-                    JSON.stringify(
-                        answerDetails
+                        submittedQuestion?.id ??
+                        submittedQuestion?.questionId
+                    );
+
+                const question =
+                    allQuestions.find(
+                        item =>
+                            Number(item.id) ===
+                            questionId
+                    ) ||
+                    FALLBACK_QUESTIONS.find(
+                        item =>
+                            Number(item.id) ===
+                            questionId
+                    ) ||
+                    submittedQuestion;
+
+                const submittedAnswer =
+                    quizAnswers[i] ??
+                    submittedQuestion?.selectedAnswer ??
+                    "";
+
+                const selected =
+                    normalizeAnswer(
+                        submittedAnswer,
+                        question
+                    );
+
+                const correctAnswer =
+                    getCorrectAnswer(
+                        question
+                    );
+
+                const isCorrect =
+                    selected !== "" &&
+                    correctAnswer !== "" &&
+                    selected ===
+                    correctAnswer;
+
+                if (isCorrect) {
+                    correctAnswers++;
+                }
+
+                answerDetails.push({
+
+                    questionId:
+                        question?.id ??
+                        questionId,
+
+                    selectedAnswer:
+                        selected,
+
+                    correct:
+                        isCorrect,
+
+                    correctAnswer:
+                        correctAnswer,
+
+                    selectedOption:
+                        getOptionText(
+                            question,
+                            selected
+                        ),
+
+                    correctOption:
+                        getOptionText(
+                            question,
+                            correctAnswer
+                        ),
+
+                    solution:
+                        getQuestionSolution(
+                            question
+                        )
+                });
+            }
+
+            const totalQuestions =
+                quizQuestions.length;
+
+            const score =
+                totalQuestions > 0
+                    ? correctAnswers
+                    : 0;
+
+            let numericUserId = null;
+
+            if (
+                userId !== undefined &&
+                userId !== null &&
+                String(userId).trim() !== ""
+            ) {
+
+                const parsedUserId =
+                    Number(userId);
+
+                if (
+                    Number.isInteger(
+                        parsedUserId
                     )
-                ]
-            );
+                ) {
+
+                    numericUserId =
+                        parsedUserId;
+                }
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    INSERT INTO quiz_results
+                    (
+                        user_id,
+                        subject,
+                        difficulty,
+                        questions,
+                        answers,
+                        answer_details,
+                        score,
+                        total_questions,
+                        correct_answers
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7,
+                        $8,
+                        $9
+                    )
+                    RETURNING
+                        id,
+                        user_id,
+                        subject,
+                        difficulty,
+                        score,
+                        total_questions,
+                        correct_answers,
+                        created_at
+                    `,
+                    [
+                        numericUserId,
+                        subject || "",
+                        difficulty || "",
+                        JSON.stringify(
+                            quizQuestions
+                        ),
+                        JSON.stringify(
+                            quizAnswers
+                        ),
+                        JSON.stringify(
+                            answerDetails
+                        ),
+                        score,
+                        totalQuestions,
+                        correctAnswers
+                    ]
+                );
 
             return res.json({
 
-                success:
-                    true,
+                success: true,
 
                 message:
-                    "Quiz result saved successfully.",
+                    "Quiz submitted successfully.",
 
-                result: {
+                result:
+                    result.rows[0],
 
-                    id:
-                        resultId,
+                score:
+                    score,
 
-                    userId:
-                        userId || null,
+                totalQuestions:
+                    totalQuestions,
 
-                    subject:
-                        subject || "",
+                correctAnswers:
+                    correctAnswers,
 
-                    difficulty:
-                        difficulty || "",
-
-                    score:
-                        Number(
-                            finalScore.toFixed(2)
-                        ),
-
-                    totalQuestions:
-                        finalTotalQuestions,
-
-                    correctAnswers:
-                        finalCorrectAnswers,
-
-                    answerDetails:
-                        answerDetails
-                }
+                answerDetails:
+                    answerDetails
             });
 
         } catch (error) {
@@ -2366,20 +2290,19 @@ app.post(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to save quiz result."
+                    "Unable to submit quiz."
             });
         }
     }
 );
 
-// ======================================================
-// QUIZ HISTORY
-// ======================================================
+/*
+========================================================
+QUIZ HISTORY
+========================================================
+*/
 
 app.get(
     "/api/quiz/history",
@@ -2387,97 +2310,82 @@ app.get(
 
         try {
 
-            const {
-                userId
-            } = req.query;
-
-            let query = `
-                SELECT
-                    id,
-                    user_id,
-                    subject,
-                    difficulty,
-                    questions,
-                    answers,
-                    score,
-                    total_questions,
-                    correct_answers,
-                    answer_details,
-                    created_at
-                FROM quiz_results
-            `;
-
-            const values = [];
-
-            if (userId) {
-
-                query += `
-                    WHERE user_id = $1
-                `;
-
-                values.push(
-                    String(userId)
+            const authenticatedUser =
+                await getAuthenticatedUser(
+                    req
                 );
+
+            let userId =
+                req.query.userId;
+
+            /*
+            Prefer authenticated user
+            when token is supplied.
+            */
+
+            if (
+                authenticatedUser
+            ) {
+
+                userId =
+                    authenticatedUser.id;
             }
 
-            query += `
-                ORDER BY created_at DESC
-            `;
+            if (
+                userId === undefined ||
+                userId === null ||
+                String(userId).trim() === ""
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "User ID is required."
+                });
+            }
+
+            const numericUserId =
+                Number(userId);
+
+            if (
+                !Number.isInteger(
+                    numericUserId
+                )
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Invalid user ID."
+                });
+            }
 
             const result =
                 await pool.query(
-                    query,
-                    values
-                );
-
-            const results =
-                result.rows.map(
-                    row => ({
-
-                        id:
-                            row.id,
-
-                        userId:
-                            row.user_id,
-
-                        subject:
-                            row.subject,
-
-                        difficulty:
-                            row.difficulty,
-
-                        questions:
-                            row.questions,
-
-                        answers:
-                            row.answers,
-
-                        score:
-                            Number(
-                                row.score || 0
-                            ),
-
-                        totalQuestions:
-                            row.total_questions,
-
-                        correctAnswers:
-                            row.correct_answers,
-
-                        answerDetails:
-                            row.answer_details,
-
-                        createdAt:
-                            row.created_at
-                    })
+                    `
+                    SELECT
+                        id,
+                        user_id,
+                        subject,
+                        difficulty,
+                        questions,
+                        answers,
+                        answer_details,
+                        score,
+                        total_questions,
+                        correct_answers,
+                        created_at
+                    FROM quiz_results
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    `,
+                    [numericUserId]
                 );
 
             return res.json({
-
-                success:
-                    true,
-
-                results:
-                    results
+                success: true,
+                history:
+                    result.rows
             });
 
         } catch (error) {
@@ -2488,10 +2396,7 @@ app.get(
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
                     "Unable to load quiz history."
             });
@@ -2499,9 +2404,185 @@ app.get(
     }
 );
 
-// ======================================================
-// AI TUTOR
-// ======================================================
+/*
+========================================================
+CLEAN AI TEXT
+========================================================
+*/
+
+function cleanAIResponse(text) {
+
+    if (!text) {
+        return "";
+    }
+
+    let result =
+        String(text);
+
+    /*
+    Remove fenced code blocks
+    */
+
+    result =
+        result.replace(
+            /```[a-zA-Z]*\n?/g,
+            ""
+        );
+
+    result =
+        result.replace(
+            /```/g,
+            ""
+        );
+
+    /*
+    Convert common Markdown headings
+    */
+
+    result =
+        result.replace(
+            /^\s*#{1,6}\s*/gm,
+            ""
+        );
+
+    /*
+    Remove LaTeX display wrappers
+    */
+
+    result =
+        result.replace(
+            /\$\$\s*/g,
+            ""
+        );
+
+    result =
+        result.replace(
+            /\s*\$\$/g,
+            ""
+        );
+
+    /*
+    Remove inline dollar math wrappers
+    */
+
+    result =
+        result.replace(
+            /\$([^$]+)\$/g,
+            "$1"
+        );
+
+    /*
+    Convert common LaTeX commands
+    */
+
+    result =
+        result.replace(
+            /\\text\s*\{([^{}]*)\}/g,
+            "$1"
+        );
+
+    result =
+        result.replace(
+            /\\times/g,
+            "×"
+        );
+
+    result =
+        result.replace(
+            /\\cdot/g,
+            "×"
+        );
+
+    result =
+        result.replace(
+            /\\div/g,
+            "÷"
+        );
+
+    result =
+        result.replace(
+            /\\sqrt\s*\{([^{}]*)\}/g,
+            "√($1)"
+        );
+
+    result =
+        result.replace(
+            /\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g,
+            "($1/$2)"
+        );
+
+    /*
+    Remove remaining backslashes from
+    common LaTeX formatting.
+    */
+
+    result =
+        result.replace(
+            /\\left/g,
+            ""
+        );
+
+    result =
+        result.replace(
+            /\\right/g,
+            ""
+        );
+
+    /*
+    Convert Markdown bold / italic
+    */
+
+    result =
+        result.replace(
+            /\*\*([^*]+)\*\*/g,
+            "$1"
+        );
+
+    result =
+        result.replace(
+            /\*([^*]+)\*/g,
+            "$1"
+        );
+
+    /*
+    Convert Markdown bullet points
+    to simple bullet characters.
+    */
+
+    result =
+        result.replace(
+            /^\s*[-*]\s+/gm,
+            "• "
+        );
+
+    /*
+    Remove excessive blank lines.
+    */
+
+    result =
+        result.replace(
+            /\n{3,}/g,
+            "\n\n"
+        );
+
+    /*
+    Remove spaces before punctuation.
+    */
+
+    result =
+        result.replace(
+            /\s+([,.!?])/g,
+            "$1"
+        );
+
+    return result.trim();
+}
+
+/*
+========================================================
+AI TUTOR
+========================================================
+*/
 
 app.post(
     "/api/ask",
@@ -2509,84 +2590,189 @@ app.post(
 
         try {
 
+            if (!genAI) {
+
+                return res.status(503).json({
+                    success: false,
+                    message:
+                        "Gemini AI is not configured."
+                });
+            }
+
             const {
                 question,
-                prompt,
-                message,
                 subject
             } = req.body || {};
 
-            const userQuestion =
-                question ||
-                prompt ||
-                message;
+            const studentQuestion =
+                String(
+                    question || ""
+                ).trim();
 
-            if (
-                !userQuestion ||
-                !String(
-                    userQuestion
-                ).trim()
-            ) {
+            const studentSubject =
+                String(
+                    subject || ""
+                ).trim();
+
+            if (!studentQuestion) {
 
                 return res.status(400).json({
-
-                    success:
-                        false,
-
+                    success: false,
                     message:
-                        "Question is required."
+                        "Please enter a question."
                 });
             }
 
-            if (!gemini) {
-
-                return res.status(500).json({
-
-                    success:
-                        false,
-
-                    message:
-                        "Gemini AI service is not configured."
-                });
-            }
-
-            const aiPrompt = `
+            const prompt = `
 You are Study Buddy AI, a helpful educational tutor.
 
+Your job is to answer the student's question accurately,
+clearly, and in a student-friendly way.
+
 Subject:
-${subject || "General"}
+${studentSubject || "General"}
 
 Student question:
-${String(
-    userQuestion
-).trim()}
+${studentQuestion}
 
-Instructions:
-- Explain clearly and simply.
-- Use student-friendly language.
-- Give step-by-step explanations when useful.
-- Do not invent facts.
-- For mathematics and science, show calculations when appropriate.
-- Keep the response focused on learning.
+IMPORTANT RESPONSE FORMAT RULES:
+
+1. Return plain readable text only.
+
+2. Do NOT use Markdown.
+
+3. Do NOT use Markdown headings such as:
+#
+##
+###
+####
+#####
+
+4. Do NOT use:
+$$
+$...$
+\\text{}
+\\frac{}
+\\times
+\\sqrt{}
+
+5. Do not return raw LaTeX.
+
+6. Write mathematical expressions using normal text.
+
+Examples:
+
+Use:
+Area = Length × Width
+
+NOT:
+$$\\text{Area} = \\text{Length} \\times \\text{Width}$$
+
+Use:
+10 feet
+
+NOT:
+$10\\text{ feet}$
+
+Use:
+6² = 36
+
+NOT:
+$6^2 = 36$
+
+7. You may use simple numbered sections:
+
+Step 1:
+Step 2:
+Step 3:
+
+8. You may use the bullet character:
+•
+
+9. Do not use Markdown bold:
+**text**
+
+10. Do not use Markdown code blocks.
+
+11. Do not start with unnecessary greetings such as:
+"Hello! I am Study Buddy AI..."
+
+12. Do not end with:
+"Let me know if you need anything else."
+
+13. Do not ask the student another question at the end.
+
+14. Give the direct answer first, followed by a clear explanation.
+
+15. For mathematics, show calculations using normal readable
+characters.
+
+16. Keep the explanation concise but useful.
+
+Return ONLY the educational answer.
 `;
 
             const response =
-                await gemini.models.generateContent({
+                await genAI.models.generateContent({
 
                     model:
                         GEMINI_MODEL,
 
                     contents:
-                        aiPrompt
+                        prompt
                 });
+
+            let answer = "";
+
+            if (
+                response &&
+                typeof response.text ===
+                "string"
+            ) {
+
+                answer =
+                    response.text;
+            }
+
+            if (
+                !answer &&
+                response?.candidates?.length
+            ) {
+
+                answer =
+                    response.candidates[0]
+                        ?.content
+                        ?.parts
+                        ?.map(
+                            part =>
+                                part.text || ""
+                        )
+                        .join("");
+            }
+
+            answer =
+                cleanAIResponse(
+                    answer
+                );
+
+            if (!answer) {
+
+                return res.status(500).json({
+                    success: false,
+                    message:
+                        "AI returned an empty response."
+                });
+            }
 
             return res.json({
 
-                success:
-                    true,
+                success: true,
 
                 answer:
-                    response.text || ""
+                    answer,
+
+                response:
+                    answer
             });
 
         } catch (error) {
@@ -2597,46 +2783,226 @@ Instructions:
             );
 
             return res.status(500).json({
-
-                success:
-                    false,
-
+                success: false,
                 message:
-                    "Unable to get AI response. Please try again."
+                    "Unable to get AI response."
             });
         }
     }
 );
 
-// ======================================================
-// 404
-// ======================================================
+/*
+========================================================
+GENERATE PRACTICE QUESTIONS
+========================================================
+*/
+
+app.post(
+    "/api/quiz/practice",
+    async (req, res) => {
+
+        try {
+
+            if (!genAI) {
+
+                return res.status(503).json({
+                    success: false,
+                    message:
+                        "Gemini AI is not configured."
+                });
+            }
+
+            const {
+                subject,
+                topic,
+                difficulty,
+                count
+            } = req.body || {};
+
+            const requestedCount =
+                Math.min(
+                    Math.max(
+                        Number(count) || 5,
+                        1
+                    ),
+                    20
+                );
+
+            const prompt = `
+Generate ${requestedCount} practice questions
+for a student.
+
+Subject:
+${subject || "General"}
+
+Topic:
+${topic || "General"}
+
+Difficulty:
+${difficulty || "Medium"}
+
+Return ONLY valid JSON.
+
+The JSON must have this exact structure:
+
+{
+  "questions": [
+    {
+      "question": "Question text",
+      "optionA": "Option A",
+      "optionB": "Option B",
+      "optionC": "Option C",
+      "optionD": "Option D",
+      "correctAnswer": "A",
+      "solution": "Short clear explanation"
+    }
+  ]
+}
+
+Rules:
+
+- correctAnswer must be A, B, C, or D.
+- Make exactly four options.
+- Make only one option correct.
+- Solutions must be plain text.
+- Do not use Markdown.
+- Do not use LaTeX.
+`;
+
+            const response =
+                await genAI.models.generateContent({
+
+                    model:
+                        GEMINI_MODEL,
+
+                    contents:
+                        prompt
+                });
+
+            let raw = "";
+
+            if (
+                response &&
+                typeof response.text ===
+                "string"
+            ) {
+
+                raw =
+                    response.text;
+            }
+
+            raw =
+                raw
+                    .replace(
+                        /```json/gi,
+                        ""
+                    )
+                    .replace(
+                        /```/g,
+                        ""
+                    )
+                    .trim();
+
+            let parsed;
+
+            try {
+
+                parsed =
+                    JSON.parse(raw);
+
+            } catch (parseError) {
+
+                /*
+                Try to extract JSON
+                if Gemini returned extra text.
+                */
+
+                const start =
+                    raw.indexOf("{");
+
+                const end =
+                    raw.lastIndexOf("}");
+
+                if (
+                    start >= 0 &&
+                    end > start
+                ) {
+
+                    parsed =
+                        JSON.parse(
+                            raw.substring(
+                                start,
+                                end + 1
+                            )
+                        );
+
+                } else {
+
+                    throw parseError;
+                }
+            }
+
+            if (
+                !parsed ||
+                !Array.isArray(
+                    parsed.questions
+                )
+            ) {
+
+                throw new Error(
+                    "Invalid practice question response."
+                );
+            }
+
+            return res.json({
+
+                success: true,
+
+                questions:
+                    parsed.questions
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Practice question error:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Unable to generate practice questions."
+            });
+        }
+    }
+);
+
+/*
+========================================================
+404
+========================================================
+*/
 
 app.use(
     (req, res) => {
 
         res.status(404).json({
-
-            success:
-                false,
-
+            success: false,
             message:
                 "API endpoint not found."
         });
     }
 );
 
-// ======================================================
-// GLOBAL ERROR
-// ======================================================
+/*
+========================================================
+GLOBAL ERROR HANDLER
+========================================================
+*/
 
 app.use(
-    (
-        error,
-        req,
-        res,
-        next
-    ) => {
+    (error, req, res, next) => {
 
         console.error(
             "Global server error:",
@@ -2644,19 +3010,18 @@ app.use(
         );
 
         res.status(500).json({
-
-            success:
-                false,
-
+            success: false,
             message:
                 "Internal server error."
         });
     }
 );
 
-// ======================================================
-// START SERVER
-// ======================================================
+/*
+========================================================
+START SERVER
+========================================================
+*/
 
 async function startServer() {
 
@@ -2664,8 +3029,12 @@ async function startServer() {
 
         await initializeDatabase();
 
+        /*
+        Test PostgreSQL connection
+        */
+
         await pool.query(
-            "SELECT NOW()"
+            "SELECT 1"
         );
 
         console.log(
@@ -2674,6 +3043,7 @@ async function startServer() {
 
         app.listen(
             PORT,
+            "0.0.0.0",
             () => {
 
                 console.log(
@@ -2702,7 +3072,7 @@ async function startServer() {
 
                 console.log(
                     `Resend: ${
-                        resendConfigured
+                        RESEND_API_KEY
                             ? "configured"
                             : "not configured"
                     }`
@@ -2717,7 +3087,7 @@ async function startServer() {
     } catch (error) {
 
         console.error(
-            "Unable to start server:",
+            "Failed to start server:",
             error
         );
 
