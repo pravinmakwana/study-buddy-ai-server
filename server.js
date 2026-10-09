@@ -329,6 +329,31 @@ async function getAuthenticatedUser(req) {
     return result.rows[0];
 }
 
+//
+
+async function requireAuth(req, res, next) {
+    try {
+        const user = await getAuthenticatedUser(req);
+
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required. Please sign in again."
+            });
+        }
+
+        // Use the database identity, never a client-supplied userId.
+        req.user = user;
+        return next();
+    } catch (error) {
+        console.error("Authentication middleware error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to verify authentication."
+        });
+    }
+}
 // ============================================================
 // QUESTIONS
 // ============================================================
