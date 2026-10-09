@@ -129,6 +129,7 @@ async function initializeDatabase() {
           AND table_name = 'users'
           AND column_name = 'id';
     `);
+console.log("USERS ID COLUMN INFO:", idInfo.rows);
 
     if (idInfo.rows.length === 0) {
         throw new Error("users.id column was not found.");
