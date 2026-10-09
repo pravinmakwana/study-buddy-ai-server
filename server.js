@@ -101,12 +101,14 @@ const QUESTIONS_FILE =
 // ============================================================
 
 
+
 async function initializeDatabase() {
     console.log("Initializing PostgreSQL database...");
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
+            id TEXT PRIMARY KEY DEFAULT
+                ('user_' || gen_random_uuid()::text),
             name VARCHAR(150) NOT NULL,
             email VARCHAR(255) NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
@@ -119,59 +121,11 @@ async function initializeDatabase() {
         );
     `);
 
-    // Repair the ID generator if the existing table
-    // has an integer ID column without a default.
-    // This does not delete existing users.
-    const idInfo = await pool.query(`
-        SELECT data_type, column_default
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'users'
-          AND column_name = 'id';
-    `);
-console.log("USERS ID COLUMN INFO:", idInfo.rows);
-
-    if (idInfo.rows.length === 0) {
-        throw new Error("users.id column was not found.");
-    }
-
-    if (
-        !["integer", "bigint", "smallint"].includes(
-            idInfo.rows[0].data_type
-        )
-    ) {
-        throw new Error(
-            "users.id is not an integer column. " +
-            "Stop and inspect the database schema before migrating."
-        );
-    }
-
-    await pool.query(`
-        CREATE SEQUENCE IF NOT EXISTS users_id_seq;
-    `);
-
-    
-    // Ensure existing TEXT IDs are generated automatically.
-
+    // Repair the existing TEXT ID column.
     await pool.query(`
         ALTER TABLE users
         ALTER COLUMN id
-        SET DEFAULT (
-            'user_' || gen_random_uuid()::text
-        );
-    `);
-
-    await pool.query(`
-        ALTER SEQUENCE users_id_seq
-        OWNED BY users.id;
-    `);
-
-    await pool.query(`
-        SELECT setval(
-            'users_id_seq'::regclass,
-            COALESCE((SELECT MAX(id) FROM users), 0) + 1,
-            false
-        );
+        SET DEFAULT ('user_' || gen_random_uuid()::text);
     `);
 
     await pool.query(`
@@ -207,7 +161,7 @@ console.log("USERS ID COLUMN INFO:", idInfo.rows);
 
     console.log("PostgreSQL database initialized successfully.");
 }
-// ============================================================
+ ============================================================
 // PASSWORD FUNCTIONS
 // ============================================================
 
