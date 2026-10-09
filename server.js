@@ -150,10 +150,15 @@ console.log("USERS ID COLUMN INFO:", idInfo.rows);
         CREATE SEQUENCE IF NOT EXISTS users_id_seq;
     `);
 
+    
+    // Ensure existing TEXT IDs are generated automatically.
+
     await pool.query(`
         ALTER TABLE users
         ALTER COLUMN id
-        SET DEFAULT nextval('users_id_seq'::regclass);
+        SET DEFAULT (
+            'user_' || gen_random_uuid()::text
+        );
     `);
 
     await pool.query(`
