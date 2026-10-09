@@ -161,7 +161,7 @@ async function initializeDatabase() {
 
     console.log("PostgreSQL database initialized successfully.");
 }
- ============================================================
+// ============================================================
 // PASSWORD FUNCTIONS
 // ============================================================
 
