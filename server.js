@@ -100,8 +100,8 @@ const QUESTIONS_FILE =
 // DATABASE INITIALIZATION
 // ============================================================
 
-async function initializeDatabase() {
 
+async function initializeDatabase() {
     console.log("Initializing PostgreSQL database...");
 
     await pool.query(`
@@ -116,6 +116,55 @@ async function initializeDatabase() {
             reset_otp_expires_at TIMESTAMPTZ,
             reset_otp_verified_until TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    // Repair the ID generator if the existing table
+    // has an integer ID column without a default.
+    // This does not delete existing users.
+    const idInfo = await pool.query(`
+        SELECT data_type, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+          AND column_name = 'id';
+    `);
+
+    if (idInfo.rows.length === 0) {
+        throw new Error("users.id column was not found.");
+    }
+
+    if (
+        !["integer", "bigint", "smallint"].includes(
+            idInfo.rows[0].data_type
+        )
+    ) {
+        throw new Error(
+            "users.id is not an integer column. " +
+            "Stop and inspect the database schema before migrating."
+        );
+    }
+
+    await pool.query(`
+        CREATE SEQUENCE IF NOT EXISTS users_id_seq;
+    `);
+
+    await pool.query(`
+        ALTER TABLE users
+        ALTER COLUMN id
+        SET DEFAULT nextval('users_id_seq'::regclass);
+    `);
+
+    await pool.query(`
+        ALTER SEQUENCE users_id_seq
+        OWNED BY users.id;
+    `);
+
+    await pool.query(`
+        SELECT setval(
+            'users_id_seq'::regclass,
+            COALESCE((SELECT MAX(id) FROM users), 0) + 1,
+            false
         );
     `);
 
@@ -152,7 +201,6 @@ async function initializeDatabase() {
 
     console.log("PostgreSQL database initialized successfully.");
 }
-
 // ============================================================
 // PASSWORD FUNCTIONS
 // ============================================================
