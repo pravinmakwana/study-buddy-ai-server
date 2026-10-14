@@ -1034,6 +1034,99 @@ app.post(
     }
 );
 
+ // ============================================================
+ // DELETE ACCOUNT
+ // ============================================================
+
+ app.delete(
+     "/api/auth/delete-account",
+     requireAuth,
+     async (req, res) => {
+         const client = await pool.connect();
+
+         try {
+             const password = String(
+                 req.body?.password || ""
+             );
+
+             if (!password) {
+                 return res.status(400).json({
+                     success: false,
+                     message: "Please enter your password to confirm account deletion."
+                 });
+             }
+
+             await client.query("BEGIN");
+
+             // Fetch the authenticated user's credentials.
+             const result = await client.query(
+                 `SELECT id, password_hash, password_salt
+                  FROM users
+                  WHERE id = $1
+                  FOR UPDATE`,
+                 [req.user.id]
+             );
+
+             if (result.rows.length === 0) {
+                 await client.query("ROLLBACK");
+
+                 return res.status(404).json({
+                     success: false,
+                     message: "Account not found."
+                 });
+             }
+
+             const user = result.rows[0];
+
+             if (!verifyPassword(
+                 password,
+                 user.password_hash,
+                 user.password_salt
+             )) {
+                 await client.query("ROLLBACK");
+
+                 return res.status(401).json({
+                     success: false,
+                     message: "Incorrect password. Account was not deleted."
+                 });
+             }
+
+             // Delete only the authenticated account.
+             await client.query(
+                 `DELETE FROM users WHERE id = $1`,
+                 [user.id]
+             );
+
+             await client.query("COMMIT");
+
+             console.log("Account deleted:", user.id);
+
+             return res.json({
+                 success: true,
+                 message: "Account deleted successfully."
+             });
+
+         } catch (error) {
+             try {
+                 await client.query("ROLLBACK");
+             } catch (rollbackError) {
+                 console.error("Rollback error:", rollbackError);
+             }
+
+             console.error("Delete account error:", error);
+
+             return res.status(500).json({
+                 success: false,
+                 message: "Unable to delete account. Please try again."
+             });
+
+         } finally {
+             client.release();
+         }
+     }
+ );
+
+
 // ============================================================
 // FORGOT PASSWORD
 // ============================================================
