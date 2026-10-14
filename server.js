@@ -154,6 +154,16 @@ async function initializeDatabase() {
         );
     `);
 
+await pool.query(`
+    ALTER TABLE quiz_results
+    ADD COLUMN IF NOT EXISTS user_id_text TEXT
+`);
+
+await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_quiz_results_user_id_text
+    ON quiz_results (user_id_text)
+`);
+
     await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_quiz_results_user_id
         ON quiz_results(user_id);
