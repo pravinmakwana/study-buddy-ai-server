@@ -1666,116 +1666,84 @@ app.get(
     }
 );
 
-// ============================================================
-// QUIZ SUBMIT
-// ============================================================
+// 
+ // ============================================================
+ // QUIZ SUBMIT
+ // ============================================================
 
 app.post(
     "/api/quiz/submit",
     async (req, res) => {
-
         try {
+            const body = req.body || {};
 
-            const body =
-                req.body || {};
-
-            // ------------------------------------------------
             // SINGLE QUESTION MODE
-            // ------------------------------------------------
-
+            // Preserve existing answer-checking behavior.
             if (
                 body.questionId !== undefined &&
                 body.selectedAnswer !== undefined
             ) {
+                const questionId = Number(body.questionId);
+                const selectedAnswer = String(
+                    body.selectedAnswer || ""
+                ).trim();
 
-                const questionId =
-                    Number(body.questionId);
-
-                const selectedAnswer =
-                    String(
-                        body.selectedAnswer || ""
-                    ).trim();
-
-                const questions =
-                    readQuestions();
-
-                const question =
-                    questions.find(
-                        item =>
-                            Number(item.id) ===
-                            questionId
-                    );
+                const questions = readQuestions();
+                const question = questions.find(
+                    item => Number(item.id) === questionId
+                );
 
                 if (!question) {
-
                     return res.status(404).json({
                         success: false,
-                        message:
-                            "Question not found."
+                        message: "Question not found."
                     });
                 }
 
-                const normalizedSelected =
-                    normalizeAnswer(
-                        selectedAnswer,
-                        question
-                    );
+                const normalizedSelected = normalizeAnswer(
+                    selectedAnswer,
+                    question
+                );
 
-                const correctAnswer =
-                    getCorrectAnswer(
-                        question
-                    );
+                const correctAnswer = getCorrectAnswer(question);
 
                 const isCorrect =
                     normalizedSelected !== "" &&
                     correctAnswer !== "" &&
-                    normalizedSelected ===
-                    correctAnswer;
+                    normalizedSelected === correctAnswer;
 
-                const solution =
-                    getQuestionSolution(
-                        question
-                    );
+                const solution = getQuestionSolution(question);
 
                 return res.json({
-
                     success: true,
-
-                    correct:
-                        isCorrect,
-
+                    correct: isCorrect,
                     questionId,
-
-                    selectedAnswer:
-                        normalizedSelected,
-
-                    selectedOption:
-                        getOptionText(
-                            question,
-                            normalizedSelected
-                        ),
-
+                    selectedAnswer: normalizedSelected,
+                    selectedOption: getOptionText(
+                        question,
+                        normalizedSelected
+                    ),
                     correctAnswer,
-
-                    correctOption:
-                        getOptionText(
-                            question,
-                            correctAnswer
-                        ),
-
+                    correctOption: getOptionText(
+                        question,
+                        correctAnswer
+                    ),
                     solution,
-
-                    explanation:
-                        solution
+                    explanation: solution
                 });
             }
 
-            // ------------------------------------------------
-            // BATCH QUIZ MODE
-            // ------------------------------------------------
+            // BATCH QUIZ MODE REQUIRES AUTHENTICATION
+            const user = await getAuthenticatedUser(req);
+
+            if (!user) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Please sign in to submit and save a quiz."
+                });
+            }
 
             const {
-                userId,
                 subject,
                 difficulty,
                 questions: submittedQuestions,
@@ -1784,81 +1752,51 @@ app.post(
                 totalQuestions
             } = body;
 
-            const quizQuestions =
-                Array.isArray(
-                    submittedQuestions
-                )
-                    ? submittedQuestions
-                    : [];
+            const quizQuestions = Array.isArray(submittedQuestions)
+                ? submittedQuestions
+                : [];
 
             const submittedAnswers =
-                answers &&
-                typeof answers === "object"
+                answers && typeof answers === "object"
                     ? answers
                     : {};
 
             let correctAnswers = 0;
 
-            const answerDetails =
-                quizQuestions.map(
-                    question => {
+            const answerDetails = quizQuestions.map(question => {
+                const questionId = Number(question.id);
 
-                        const questionId =
-                            Number(
-                                question.id
-                            );
+                const selected =
+                    submittedAnswers[questionId] ??
+                    submittedAnswers[String(questionId)] ??
+                    "";
 
-                        const selected =
-                            submittedAnswers[
-                                questionId
-                            ] ??
-                            submittedAnswers[
-                                String(questionId)
-                            ] ??
-                            "";
-
-                        const normalizedSelected =
-                            normalizeAnswer(
-                                selected,
-                                question
-                            );
-
-                        const correctAnswer =
-                            getCorrectAnswer(
-                                question
-                            );
-
-                        const correct =
-                            normalizedSelected ===
-                            correctAnswer &&
-                            correctAnswer !== "";
-
-                        if (correct) {
-                            correctAnswers++;
-                        }
-
-                        return {
-
-                            questionId,
-
-                            selectedAnswer:
-                                normalizedSelected,
-
-                            correctAnswer,
-
-                            correct,
-
-                            solution:
-                                getQuestionSolution(
-                                    question
-                                )
-                        };
-                    }
+                const normalizedSelected = normalizeAnswer(
+                    selected,
+                    question
                 );
 
+                const correctAnswer = getCorrectAnswer(question);
+
+                const correct =
+                    normalizedSelected === correctAnswer &&
+                    correctAnswer !== "";
+
+                if (correct) {
+                    correctAnswers++;
+                }
+
+                return {
+                    questionId,
+                    selectedAnswer: normalizedSelected,
+                    correctAnswer,
+                    correct,
+                    solution: getQuestionSolution(question)
+                };
+            });
+
             const finalTotal =
-                Number(totalQuestions) ||
-                quizQuestions.length;
+                Number(totalQuestions) || quizQuestions.length;
 
             const finalScore =
                 score !== undefined
@@ -1866,92 +1804,58 @@ app.post(
                     : (
                         finalTotal > 0
                             ? Math.round(
-                                (
-                                    correctAnswers /
-                                    finalTotal
-                                ) * 100
+                                (correctAnswers / finalTotal) * 100
                             )
                             : 0
                     );
 
-            let savedResult = null;
+            const insert = await pool.query(
+                `
+                INSERT INTO quiz_results
+                (
+                    user_id_text,
+                    subject,
+                    difficulty,
+                    questions,
+                    answers,
+                    answer_details,
+                    score,
+                    total_questions,
+                    correct_answers
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, created_at
+                `,
+                [
+                    user.id,
+                    subject || "",
+                    difficulty || "",
+                    JSON.stringify(quizQuestions),
+                    JSON.stringify(submittedAnswers),
+                    JSON.stringify(answerDetails),
+                    finalScore,
+                    finalTotal,
+                    correctAnswers
+                ]
+            );
 
-            if (userId) {
-
-                const insert =
-                    await pool.query(
-                        `
-                        INSERT INTO quiz_results
-                        (
-                            user_id,
-                            subject,
-                            difficulty,
-                            questions,
-                            answers,
-                            answer_details,
-                            score,
-                            total_questions,
-                            correct_answers
-                        )
-                        VALUES
-                        ($1, $2, $3, $4, $5, $6,
-                         $7, $8, $9)
-                        RETURNING
-                            id,
-                            created_at
-                        `,
-                        [
-                            Number(userId),
-                            subject || "",
-                            difficulty || "",
-                            JSON.stringify(
-                                quizQuestions
-                            ),
-                            JSON.stringify(
-                                submittedAnswers
-                            ),
-                            JSON.stringify(
-                                answerDetails
-                            ),
-                            finalScore,
-                            finalTotal,
-                            correctAnswers
-                        ]
-                    );
-
-                savedResult =
-                    insert.rows[0];
-            }
+            const savedResult = insert.rows[0];
 
             return res.json({
-
                 success: true,
-
-                score:
-                    finalScore,
-
-                totalQuestions:
-                    finalTotal,
-
+                score: finalScore,
+                totalQuestions: finalTotal,
                 correctAnswers,
-
                 answerDetails,
-
-                resultId:
-                    savedResult?.id || null
+                resultId: savedResult.id
             });
 
         } catch (error) {
-
-            console.error(
-                "Quiz submit error:",
-                error
-            );
+            console.error("Quiz submit error:", error);
 
             return res.status(500).json({
                 success: false,
-                message:
-                    "Unable to submit quiz."
+                message: "Unable to submit quiz."
             });
         }
     }
@@ -1963,190 +1867,44 @@ app.post(
 
 app.get(
     "/api/quiz/history",
+    requireAuth,
     async (req, res) => {
-
         try {
-
-            const userId =
-                Number(
-                    req.query.userId
-                );
-
-            if (!userId) {
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "userId is required."
-                });
-            }
-
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        subject,
-                        difficulty,
-                        questions,
-                        answers,
-                        answer_details,
-                        score,
-                        total_questions,
-                        correct_answers,
-                        created_at
-                    FROM quiz_results
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    `,
-                    [userId]
-                );
+            const result = await pool.query(
+                `
+                SELECT
+                    id,
+                    subject,
+                    difficulty,
+                    questions,
+                    answers,
+                    answer_details,
+                    score,
+                    total_questions,
+                    correct_answers,
+                    created_at
+                FROM quiz_results
+                WHERE user_id_text = $1
+                ORDER BY created_at DESC
+                `,
+                [req.user.id]
+            );
 
             return res.json({
-
                 success: true,
-
-                history:
-                    result.rows
+                history: result.rows
             });
 
         } catch (error) {
-
-            console.error(
-                "Quiz history error:",
-                error
-            );
+            console.error("Quiz history error:", error);
 
             return res.status(500).json({
                 success: false,
-                message:
-                    "Unable to load quiz history."
+                message: "Unable to load quiz history."
             });
         }
     }
 );
-
-// ============================================================
-// AI TUTOR
-// ============================================================
-
-app.post(
-    "/api/ask",
-    async (req, res) => {
-
-        try {
-
-            const {
-                question,
-                prompt,
-                message
-            } = req.body || {};
-
-            const userQuestion =
-                String(
-                    question ||
-                    prompt ||
-                    message ||
-                    ""
-                ).trim();
-
-            if (!userQuestion) {
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Please enter a question."
-                });
-            }
-
-            if (!gemini) {
-
-                return res.status(503).json({
-                    success: false,
-                    message:
-                        "AI service is not configured."
-                });
-            }
-
-            const systemInstruction = `
-You are Study Buddy AI, a friendly educational AI tutor.
-
-Help students understand concepts clearly.
-
-Rules:
-1. Explain in simple language.
-2. Use step-by-step explanations when useful.
-3. Use examples.
-4. Use headings and bullet points.
-5. For mathematics, show calculations clearly.
-6. Do not provide unsafe or harmful instructions.
-7. Encourage learning and understanding.
-8. Avoid unnecessary repetition.
-`;
-
-            const response =
-                await gemini.models.generateContent({
-
-                    model:
-                        GEMINI_MODEL,
-
-                    contents: [
-                        {
-                            role: "user",
-                            parts: [
-                                {
-                                    text:
-                                        `${systemInstruction}\n\nStudent question:\n${userQuestion}`
-                                }
-                            ]
-                        }
-                    ]
-                });
-
-            const answer =
-                response?.text ||
-                response?.candidates?.[0]
-                    ?.content?.parts
-                    ?.map(
-                        part =>
-                            part.text || ""
-                    )
-                    .join("") ||
-                "";
-
-            if (!answer.trim()) {
-
-                return res.status(500).json({
-                    success: false,
-                    message:
-                        "AI did not return an answer."
-                });
-            }
-
-            return res.json({
-
-                success: true,
-
-                answer:
-                    answer.trim()
-            });
-
-        } catch (error) {
-
-            console.error(
-                "AI Tutor error:",
-                error
-            );
-
-            return res.status(500).json({
-                success: false,
-                message:
-                    "Unable to get AI answer."
-            });
-        }
-    }
-);
-
 // ============================================================
 // 404
 // ============================================================
