@@ -17,6 +17,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+app.use((req, res, next) => {
+    console.log(
+        `[REQUEST] ${new Date().toISOString()} ${req.method} ${req.originalUrl}`
+    );
+
+    res.on("finish", () => {
+        console.log(
+            `[RESPONSE] ${req.method} ${req.originalUrl} ${res.statusCode}`
+        );
+    });
+
+    next();
+});
+
 // ============================================================
 // CONFIGURATION
 // ============================================================
