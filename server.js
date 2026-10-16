@@ -1920,15 +1920,18 @@ app.get(
     }
 );
 
+/* 
 /* ============================================================
-   ASK AI
+   ASK AI - WITH RETRY HANDLING
    ============================================================ */
 
 app.post("/api/ask", async (req, res) => {
+    const sleep = (ms) =>
+        new Promise(resolve => setTimeout(resolve, ms));
+
     try {
         const body = req.body || {};
 
-        // Support common field names used by Android clients.
         const prompt = String(
             body.prompt ??
             body.question ??
@@ -1945,33 +1948,150 @@ app.post("/api/ask", async (req, res) => {
         }
 
         if (!gemini || !GEMINI_API_KEY) {
-            console.error("Ask AI failed: Gemini is not configured.");
+            console.error(
+                "Ask AI failed: Gemini is not configured."
+            );
 
             return res.status(503).json({
                 success: false,
-                message: "AI service is not configured. Please try again later."
+                message:
+                    "AI service is not configured. Please try again later."
             });
         }
 
         console.log("Ask AI request received.");
 
-        const result = await gemini.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: prompt
-        });
+        let result = null;
+        let lastError = null;
 
-        const answer = String(result.text || "").trim();
+        // Maximum 3 attempts, including the first request.
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                console.log(
+                    `Gemini request attempt ${attempt}/3.`
+                );
 
-        if (!answer) {
-            console.error("Ask AI returned an empty response.");
+                result = await gemini.models.generateContent({
+                    model: GEMINI_MODEL,
+                    contents: prompt
+                });
+
+                lastError = null;
+                break;
+
+            } catch (error) {
+                lastError = error;
+
+                const status = Number(
+                    error?.status ??
+                    error?.code ??
+                    error?.response?.status ??
+                    0
+                );
+
+                const errorText = String(
+                    error?.message || error || ""
+                );
+
+                const temporaryError =
+                    [408, 429, 500, 502, 503, 504]
+                        .includes(status) ||
+                    /UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|high demand|temporarily unavailable/i
+                        .test(errorText);
+
+                console.error(
+                    `Gemini attempt ${attempt} failed. ` +
+                    `Status: ${status || "unknown"}. ` +
+                    `Message: ${errorText}`
+                );
+
+                if (!temporaryError || attempt === 3) {
+                    break;
+                }
+
+                // Wait 1 second, then 2 seconds before retrying.
+                await sleep(attempt * 1000);
+            }
+        }
+
+        if (lastError) {
+            const status = Number(
+                lastError?.status ??
+                lastError?.code ??
+                lastError?.response?.status ??
+                0
+            );
+
+            const errorText = String(
+                lastError?.message || lastError || ""
+            );
+
+            console.error(
+                "Ask AI failed after retries:",
+                errorText
+            );
+
+            if (
+                status === 429 ||
+                /RESOURCE_EXHAUSTED/i.test(errorText)
+            ) {
+                return res.status(429).json({
+                    success: false,
+                    message:
+                        "The AI service is busy or has reached its usage limit. Please wait a moment and try again."
+                });
+            }
+
+            if (
+                [408, 500, 502, 503, 504].includes(status) ||
+                /UNAVAILABLE|overloaded|high demand|temporarily unavailable/i
+                    .test(errorText)
+            ) {
+                return res.status(503).json({
+                    success: false,
+                    message:
+                        "The AI service is temporarily busy. Please try again in a moment."
+                });
+            }
+
+            if (
+                status === 400 ||
+                status === 401 ||
+                status === 403
+            ) {
+                return res.status(502).json({
+                    success: false,
+                    message:
+                        "The AI request could not be processed. Please check the server's Gemini model and API key configuration."
+                });
+            }
 
             return res.status(502).json({
                 success: false,
-                message: "AI returned an empty response. Please try again."
+                message:
+                    "Unable to get an AI response. Please try again later."
             });
         }
 
-        console.log("Ask AI response generated successfully.");
+        const answer = String(
+            result?.text || ""
+        ).trim();
+
+        if (!answer) {
+            console.error(
+                "Ask AI returned an empty response."
+            );
+
+            return res.status(502).json({
+                success: false,
+                message:
+                    "AI returned an empty response. Please try again."
+            });
+        }
+
+        console.log(
+            "Ask AI response generated successfully."
+        );
 
         return res.json({
             success: true,
@@ -1982,16 +2102,18 @@ app.post("/api/ask", async (req, res) => {
 
     } catch (error) {
         console.error(
-            "Ask AI error:",
-            error?.message || "Unknown error"
+            "Unexpected Ask AI error:",
+            error?.stack || error?.message || error
         );
 
         return res.status(500).json({
             success: false,
-            message: "Unable to get AI response. Please try again."
+            message:
+                "An unexpected error occurred while getting the AI response. Please try again."
         });
     }
 });
+
 // ============================================================
 // 404
 // ============================================================
