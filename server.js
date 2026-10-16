@@ -1919,6 +1919,79 @@ app.get(
         }
     }
 );
+
+/* ============================================================
+   ASK AI
+   ============================================================ */
+
+app.post("/api/ask", async (req, res) => {
+    try {
+        const body = req.body || {};
+
+        // Support common field names used by Android clients.
+        const prompt = String(
+            body.prompt ??
+            body.question ??
+            body.message ??
+            body.text ??
+            ""
+        ).trim();
+
+        if (!prompt) {
+            return res.status(400).json({
+                success: false,
+                message: "Please enter a question."
+            });
+        }
+
+        if (!gemini || !GEMINI_API_KEY) {
+            console.error("Ask AI failed: Gemini is not configured.");
+
+            return res.status(503).json({
+                success: false,
+                message: "AI service is not configured. Please try again later."
+            });
+        }
+
+        console.log("Ask AI request received.");
+
+        const result = await gemini.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: prompt
+        });
+
+        const answer = String(result.text || "").trim();
+
+        if (!answer) {
+            console.error("Ask AI returned an empty response.");
+
+            return res.status(502).json({
+                success: false,
+                message: "AI returned an empty response. Please try again."
+            });
+        }
+
+        console.log("Ask AI response generated successfully.");
+
+        return res.json({
+            success: true,
+            answer: answer,
+            response: answer,
+            message: answer
+        });
+
+    } catch (error) {
+        console.error(
+            "Ask AI error:",
+            error?.message || "Unknown error"
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to get AI response. Please try again."
+        });
+    }
+});
 // ============================================================
 // 404
 // ============================================================
