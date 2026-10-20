@@ -1560,400 +1560,331 @@ app.post(
 // QUIZ QUESTIONS
 // ============================================================
 
-app.get(
-    "/api/quiz/questions",
-    async (req, res) => {
+app.get("/api/quiz/questions", async (req, res) => {
+    try {
+        const { subject, difficulty, count } = req.query;
 
-        try {
+        let questions = readQuestions();
 
-            const {
-                subject,
-                difficulty,
-                count
-            } = req.query;
-
-            let questions =
-                readQuestions();
-
-            if (!questions.length) {
-
-                return res.status(404).json({
-                    success: false,
-                    message:
-                        "No questions found."
-                });
-            }
-
-            if (
-                subject &&
-                String(subject).trim() &&
-                String(subject).toLowerCase() !== "all"
-            ) {
-
-                const requestedSubject =
-                    String(subject)
-                        .trim()
-                        .toLowerCase();
-
-                questions =
-                    questions.filter(
-                        question =>
-                            String(
-                                question.subject || ""
-                            )
-                            .trim()
-                            .toLowerCase() ===
-                            requestedSubject
-                    );
-            }
-
-            if (
-                difficulty &&
-                String(difficulty).trim() &&
-                String(difficulty).toLowerCase() !== "all"
-            ) {
-
-                const requestedDifficulty =
-                    String(difficulty)
-                        .trim()
-                        .toLowerCase();
-
-                questions =
-                    questions.filter(
-                        question =>
-                            String(
-                                question.difficulty || ""
-                            )
-                            .trim()
-                            .toLowerCase() ===
-                            requestedDifficulty
-                    );
-            }
-
-            if (!questions.length) {
-
-                return res.status(404).json({
-                    success: false,
-                    message:
-                        "No questions found for the selected subject and difficulty."
-                });
-            }
-
-            questions =
-                questions.sort(
-                    () => Math.random() - 0.5
-                );
-
-            const requestedCount =
-                Math.max(
-                    1,
-                    Math.min(
-                        Number(count) || 5,
-                        50
-                    )
-                );
-
-            questions =
-                questions.slice(
-                    0,
-                    requestedCount
-                );
-
-            // Never expose correct answer
-            // before the user submits.
-
-            
-const safeQuestions = questions.map(question => {
-    const copy = { ...question };
-
-    for (const key of [
-        "question",
-        "optionA",
-        "optionB",
-        "optionC",
-        "optionD"
-    ]) {
-        if (copy[key] !== undefined) {
-            copy[key] = formatMathText(copy[key]);
+        if (!questions.length) {
+            return res.status(404).json({
+                success: false,
+                message: "No questions found."
+            });
         }
+
+        if (
+            subject &&
+            String(subject).trim() &&
+            String(subject).toLowerCase() !== "all"
+        ) {
+            const requestedSubject = String(subject)
+                .trim()
+                .toLowerCase();
+
+            questions = questions.filter(question =>
+                String(question.subject || "")
+                    .trim()
+                    .toLowerCase() === requestedSubject
+            );
+        }
+
+        if (
+            difficulty &&
+            String(difficulty).trim() &&
+            String(difficulty).toLowerCase() !== "all"
+        ) {
+            const requestedDifficulty = String(difficulty)
+                .trim()
+                .toLowerCase();
+
+            questions = questions.filter(question =>
+                String(question.difficulty || "")
+                    .trim()
+                    .toLowerCase() === requestedDifficulty
+            );
+        }
+
+        if (!questions.length) {
+            return res.status(404).json({
+                success: false,
+                message:
+                    "No questions found for the selected subject and difficulty."
+            });
+        }
+
+        // Shuffle the available questions.
+        questions.sort(() => Math.random() - 0.5);
+
+        const requestedCount = Math.max(
+            1,
+            Math.min(Number(count) || 5, 50)
+        );
+
+        questions = questions.slice(0, requestedCount);
+
+        // Remove answers and solutions before sending questions to the app.
+        const safeQuestions = questions.map(question => {
+            const copy = { ...question };
+
+            for (const key of [
+                "question",
+                "optionA",
+                "optionB",
+                "optionC",
+                "optionD"
+            ]) {
+                if (copy[key] !== undefined) {
+                    copy[key] = formatMathText(copy[key]);
+                }
+            }
+
+            for (const key of [
+                "correctAnswer",
+                "correct_answer",
+                "correctOption",
+                "correct_option",
+                "answer",
+                "correct",
+                "solution",
+                "explanation",
+                "answerExplanation",
+                "answer_explanation"
+            ]) {
+                delete copy[key];
+            }
+
+            return copy;
+        });
+
+        return res.json({
+            success: true,
+            questions: safeQuestions
+        });
+
+    } catch (error) {
+        console.error("Quiz questions error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Unable to load quiz questions."
+        });
     }
-
-    // Never expose answers or solutions before submission.
-    delete copy.correctAnswer;
-    delete copy.correct_answer;
-    delete copy.correctOption;
-    delete copy.correct_option;
-    delete copy.answer;
-    delete copy.correct;
-    delete copy.solution;
-    delete copy.explanation;
-    delete copy.answerExplanation;
-    delete copy.answer_explanation;
-
-    return copy;
 });
 
 
-// 
- // ============================================================
- // QUIZ SUBMIT
- // ============================================================
+// ============================================================
+// QUIZ SUBMIT
+// ============================================================
 
+app.post("/api/quiz/submit", async (req, res) => {
+    try {
+        const body = req.body || {};
 
+        // SINGLE QUESTION MODE
+        // This mode checks an answer without saving quiz history.
+        if (
+            body.questionId !== undefined &&
+            body.selectedAnswer !== undefined
+        ) {
+            const questionId = Number(body.questionId);
 
-app.post(
-    "/api/quiz/submit",
-    async (req, res) => {
-        try {
-            const body = req.body || {};
-
-            // SINGLE QUESTION MODE
-            if (
-                body.questionId !== undefined &&
-                body.selectedAnswer !== undefined
-            ) {
-                const questionId = Number(body.questionId);
-                const selectedAnswer = String(
-                    body.selectedAnswer || ""
-                ).trim();
-
-                const questions = readQuestions();
-
-                const question = questions.find(
-                    item => Number(item.id) === questionId
-                );
-
-                if (!question) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Question not found."
-                    });
-                }
-
-                const normalizedSelected = normalizeAnswer(
-                    selectedAnswer,
-                    question
-                );
-
-                const correctAnswer =
-                    getCorrectAnswer(question);
-
-                const isCorrect =
-                    normalizedSelected !== "" &&
-                    correctAnswer !== "" &&
-                    normalizedSelected === correctAnswer;
-
-                const solution = formatMathText(
-                    getQuestionSolution(question)
-                );
-
-                return res.json({
-                    success: true,
-                    correct: isCorrect,
-                    questionId,
-                    selectedAnswer: normalizedSelected,
-                    selectedOption: formatMathText(
-                        getOptionText(
-                            question,
-                            normalizedSelected
-                        )
-                    ),
-                    correctAnswer,
-                    correctOption: formatMathText(
-                        getOptionText(
-                            question,
-                            correctAnswer
-                        )
-                    ),
-                    solution,
-                    explanation: solution
-                });
-            } // IMPORTANT: closes single-question mode
-
-            // BATCH QUIZ MODE: requires authentication
-            const user = await getAuthenticatedUser(req);
-
-            if (!user) {
-                return res.status(401).json({
+            if (!Number.isFinite(questionId)) {
+                return res.status(400).json({
                     success: false,
-                    message:
-                        "Please sign in to submit and save a quiz."
+                    message: "Invalid question ID."
                 });
             }
 
-            const {
+            const selectedAnswer = String(
+                body.selectedAnswer || ""
+            ).trim();
+
+            const questions = readQuestions();
+
+            const question = questions.find(
+                item => Number(item.id) === questionId
+            );
+
+            if (!question) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Question not found."
+                });
+            }
+
+            const normalizedSelected = normalizeAnswer(
+                selectedAnswer,
+                question
+            );
+
+            const correctAnswer = getCorrectAnswer(question);
+
+            const isCorrect =
+                normalizedSelected !== "" &&
+                correctAnswer !== "" &&
+                normalizedSelected === correctAnswer;
+
+            const solution = formatMathText(
+                getQuestionSolution(question)
+            );
+
+            return res.json({
+                success: true,
+                correct: isCorrect,
+                questionId,
+                selectedAnswer: normalizedSelected,
+                selectedOption: formatMathText(
+                    getOptionText(question, normalizedSelected)
+                ),
+                correctAnswer,
+                correctOption: formatMathText(
+                    getOptionText(question, correctAnswer)
+                ),
+                solution,
+                explanation: solution
+            });
+        }
+
+        // BATCH QUIZ MODE REQUIRES AUTHENTICATION.
+        const user = await getAuthenticatedUser(req);
+
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Please sign in to submit and save a quiz."
+            });
+        }
+
+        const {
+            subject,
+            difficulty,
+            questions: submittedQuestions,
+            answers,
+            score,
+            totalQuestions
+        } = body;
+
+        if (
+            !Array.isArray(submittedQuestions) ||
+            submittedQuestions.length === 0
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Please submit at least one quiz question."
+            });
+        }
+
+        const quizQuestions = submittedQuestions;
+
+        const submittedAnswers =
+            answers &&
+            typeof answers === "object" &&
+            !Array.isArray(answers)
+                ? answers
+                : {};
+
+        let correctAnswers = 0;
+
+        const answerDetails = quizQuestions.map(question => {
+            const questionId = Number(question.id);
+
+            const selected =
+                submittedAnswers[questionId] ??
+                submittedAnswers[String(questionId)] ??
+                "";
+
+            const normalizedSelected = normalizeAnswer(
+                selected,
+                question
+            );
+
+            const correctAnswer = getCorrectAnswer(question);
+
+            const correct =
+                normalizedSelected !== "" &&
+                normalizedSelected === correctAnswer &&
+                correctAnswer !== "";
+
+            if (correct) {
+                correctAnswers++;
+            }
+
+            return {
+                questionId,
+                selectedAnswer: normalizedSelected,
+                correctAnswer,
+                correct,
+                solution: formatMathText(
+                    getQuestionSolution(question)
+                )
+            };
+        });
+
+        const finalTotal =
+            Number(totalQuestions) || quizQuestions.length;
+
+        // Calculate the score from server-checked answers.
+        // Do not trust a score supplied by the client.
+        const finalScore = finalTotal > 0
+            ? Math.round((correctAnswers / finalTotal) * 100)
+            : 0;
+
+        const insert = await pool.query(
+            `
+            INSERT INTO quiz_results (
+                user_id_text,
                 subject,
                 difficulty,
-                questions: submittedQuestions,
+                questions,
                 answers,
+                answer_details,
                 score,
-                totalQuestions
-            } = body;
+                total_questions,
+                correct_answers
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id, created_at
+            `,
+            [
+                user.id,
+                String(subject || ""),
+                String(difficulty || ""),
+                JSON.stringify(quizQuestions),
+                JSON.stringify(submittedAnswers),
+                JSON.stringify(answerDetails),
+                finalScore,
+                finalTotal,
+                correctAnswers
+            ]
+        );
 
-            const quizQuestions =
-                Array.isArray(submittedQuestions)
-                    ? submittedQuestions
-                    : [];
+        const savedResult = insert.rows[0];
 
-            const submittedAnswers =
-                answers && typeof answers === "object"
-                    ? answers
-                    : {};
+        return res.json({
+            success: true,
+            score: finalScore,
+            totalQuestions: finalTotal,
+            correctAnswers,
+            answerDetails,
+            resultId: savedResult.id,
+            createdAt: savedResult.created_at
+        });
 
-            let correctAnswers = 0;
+    } catch (error) {
+        console.error("Quiz submit error:", error);
 
-            const answerDetails = quizQuestions.map(question => {
-                const questionId = Number(question.id);
-
-                const selected =
-                    submittedAnswers[questionId] ??
-                    submittedAnswers[String(questionId)] ??
-                    "";
-
-                const normalizedSelected = normalizeAnswer(
-                    selected,
-                    question
-                );
-
-                const correctAnswer =
-                    getCorrectAnswer(question);
-
-                const correct =
-                    normalizedSelected === correctAnswer &&
-                    correctAnswer !== "";
-
-                if (correct) {
-                    correctAnswers++;
-                }
-
-                return {
-                    questionId,
-                    selectedAnswer: normalizedSelected,
-                    correctAnswer,
-                    correct,
-                    solution: formatMathText(
-                        getQuestionSolution(question)
-                    )
-                };
-            });
-
-            const finalTotal =
-                Number(totalQuestions) ||
-                quizQuestions.length;
-
-            const finalScore =
-                score !== undefined
-                    ? Number(score)
-                    : (
-                        finalTotal > 0
-                            ? Math.round(
-                                (correctAnswers / finalTotal) * 100
-                            )
-                            : 0
-                    );
-
-            const insert = await pool.query(
-                `
-                INSERT INTO quiz_results
-                (
-                    user_id_text,
-                    subject,
-                    difficulty,
-                    questions,
-                    answers,
-                    answer_details,
-                    score,
-                    total_questions,
-                    correct_answers
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING id, created_at
-                `,
-                [
-                    user.id,
-                    subject || "",
-                    difficulty || "",
-                    JSON.stringify(quizQuestions),
-                    JSON.stringify(submittedAnswers),
-                    JSON.stringify(answerDetails),
-                    finalScore,
-                    finalTotal,
-                    correctAnswers
-                ]
-            );
-
-            const savedResult = insert.rows[0];
-
-            return res.json({
-                success: true,
-                score: finalScore,
-                totalQuestions: finalTotal,
-                correctAnswers,
-                answerDetails,
-                resultId: savedResult.id
-            });
-
-        } catch (error) {
-            console.error("Quiz submit error:", error);
-
-            return res.status(500).json({
-                success: false,
-                message: "Unable to submit quiz."
-            });
-        }
+        return res.status(500).json({
+            success: false,
+            message: "Unable to submit quiz."
+        });
     }
-);
-
+});
 
 // ============================================================
-// QUIZ HISTORY
+// ASK AI - WITH RETRY HANDLING
 // ============================================================
-
-app.get(
-    "/api/quiz/history",
-    requireAuth,
-    async (req, res) => {
-        try {
-            const result = await pool.query(
-                `
-                SELECT
-                    id,
-                    subject,
-                    difficulty,
-                    questions,
-                    answers,
-                    answer_details,
-                    score,
-                    total_questions,
-                    correct_answers,
-                    created_at
-                FROM quiz_results
-                WHERE user_id_text = $1
-                ORDER BY created_at DESC
-                `,
-                [req.user.id]
-            );
-
-            return res.json({
-                success: true,
-                history: result.rows
-            });
-
-        } catch (error) {
-            console.error("Quiz history error:", error);
-
-            return res.status(500).json({
-                success: false,
-                message: "Unable to load quiz history."
-            });
-        }
-    }
-);
-
-/* 
-/* ============================================================
-   ASK AI - WITH RETRY HANDLING
-   ============================================================ */
 
 app.post("/api/ask", async (req, res) => {
     const sleep = (ms) =>
