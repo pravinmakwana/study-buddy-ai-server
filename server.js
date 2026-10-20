@@ -1866,6 +1866,7 @@ return res.json({
                 ]
             );
 
+            
             const savedResult = insert.rows[0];
 
             return res.json({
