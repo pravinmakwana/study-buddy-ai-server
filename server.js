@@ -433,6 +433,35 @@ function readQuestions() {
 // QUIZ ANSWER HELPERS
 // ============================================================
 
+function formatMathText(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    return String(value)
+        // Convert common LaTeX commands to readable text.
+        .replace(/\\times\b/g, "×")
+        .replace(/\\cdot\b/g, "·")
+        .replace(/\\div\b/g, "÷")
+        .replace(/\\pm\b/g, "±")
+        .replace(/\\neq\b/g, "≠")
+        .replace(/\\leq\b|\\le\b/g, "≤")
+        .replace(/\\geq\b|\\ge\b/g, "≥")
+        .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
+        .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)")
+        .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
+        .replace(/\\mathrm\s*\{([^{}]*)\}/g, "$1")
+        .replace(/\\mathbf\s*\{([^{}]*)\}/g, "$1")
+        .replace(/\\,/g, " ")
+        .replace(/\\;/g, " ")
+        .replace(/\\!/g, "")
+        .replace(/\$\$?/g, "")
+        .replace(/\\\(/g, "")
+        .replace(/\\\)/g, "")
+        .replace(/\\\[/g, "")
+        .replace(/\\\]/g, "");
+}
+
 function normalizeAnswer(value, question) {
 
     if (
