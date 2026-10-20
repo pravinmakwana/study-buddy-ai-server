@@ -1662,52 +1662,37 @@ app.get(
             // Never expose correct answer
             // before the user submits.
 
-            const safeQuestions =
-                questions.map(
-                    question => {
+            
+const safeQuestions = questions.map(question => {
+    const copy = { ...question };
 
-                        const copy = {
-                            ...question
-                        };
-
-                        delete copy.correctAnswer;
-                        delete copy.correct_answer;
-                        delete copy.correctOption;
-                        delete copy.correct_option;
-                        delete copy.answer;
-                        delete copy.correct;
-                        delete copy.solution;
-                        delete copy.explanation;
-                        delete copy.answerExplanation;
-                        delete copy.answer_explanation;
-
-                        return copy;
-                    }
-                );
-
-            return res.json({
-
-                success: true,
-
-                questions:
-                    safeQuestions
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Quiz questions error:",
-                error
-            );
-
-            return res.status(500).json({
-                success: false,
-                message:
-                    "Unable to load quiz questions."
-            });
+    for (const key of [
+        "question",
+        "optionA",
+        "optionB",
+        "optionC",
+        "optionD"
+    ]) {
+        if (copy[key] !== undefined) {
+            copy[key] = formatMathText(copy[key]);
         }
     }
-);
+
+    // Never expose answers or solutions before submission.
+    delete copy.correctAnswer;
+    delete copy.correct_answer;
+    delete copy.correctOption;
+    delete copy.correct_option;
+    delete copy.answer;
+    delete copy.correct;
+    delete copy.solution;
+    delete copy.explanation;
+    delete copy.answerExplanation;
+    delete copy.answer_explanation;
+
+    return copy;
+});
+
 
 // 
  // ============================================================
@@ -1755,26 +1740,25 @@ app.post(
                     correctAnswer !== "" &&
                     normalizedSelected === correctAnswer;
 
-                const solution = getQuestionSolution(question);
+                const solution = formatMathText(
+    getQuestionSolution(question)
+);
 
-                return res.json({
-                    success: true,
-                    correct: isCorrect,
-                    questionId,
-                    selectedAnswer: normalizedSelected,
-                    selectedOption: getOptionText(
-                        question,
-                        normalizedSelected
-                    ),
-                    correctAnswer,
-                    correctOption: getOptionText(
-                        question,
-                        correctAnswer
-                    ),
-                    solution,
-                    explanation: solution
-                });
-            }
+return res.json({
+    success: true,
+    correct: isCorrect,
+    questionId,
+    selectedAnswer: normalizedSelected,
+    selectedOption: formatMathText(
+        getOptionText(question, normalizedSelected)
+    ),
+    correctAnswer,
+    correctOption: formatMathText(
+        getOptionText(question, correctAnswer)
+    ),
+    solution,
+    explanation: solution
+});
 
             // BATCH QUIZ MODE REQUIRES AUTHENTICATION
             const user = await getAuthenticatedUser(req);
@@ -2102,9 +2086,9 @@ app.post("/api/ask", async (req, res) => {
             });
         }
 
-        const answer = String(
-            result?.text || ""
-        ).trim();
+        const answer = formatMathText(
+    String(result?.text || "").trim()
+);
 
         if (!answer) {
             console.error(
