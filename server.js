@@ -1699,6 +1699,7 @@ const safeQuestions = questions.map(question => {
  // QUIZ SUBMIT
  // ============================================================
 
+
 app.post(
     "/api/quiz/submit",
     async (req, res) => {
@@ -1706,7 +1707,6 @@ app.post(
             const body = req.body || {};
 
             // SINGLE QUESTION MODE
-            // Preserve existing answer-checking behavior.
             if (
                 body.questionId !== undefined &&
                 body.selectedAnswer !== undefined
@@ -1717,6 +1717,7 @@ app.post(
                 ).trim();
 
                 const questions = readQuestions();
+
                 const question = questions.find(
                     item => Number(item.id) === questionId
                 );
@@ -1733,7 +1734,8 @@ app.post(
                     question
                 );
 
-                const correctAnswer = getCorrectAnswer(question);
+                const correctAnswer =
+                    getCorrectAnswer(question);
 
                 const isCorrect =
                     normalizedSelected !== "" &&
@@ -1741,32 +1743,40 @@ app.post(
                     normalizedSelected === correctAnswer;
 
                 const solution = formatMathText(
-    getQuestionSolution(question)
-);
+                    getQuestionSolution(question)
+                );
 
-return res.json({
-    success: true,
-    correct: isCorrect,
-    questionId,
-    selectedAnswer: normalizedSelected,
-    selectedOption: formatMathText(
-        getOptionText(question, normalizedSelected)
-    ),
-    correctAnswer,
-    correctOption: formatMathText(
-        getOptionText(question, correctAnswer)
-    ),
-    solution,
-    explanation: solution
-});
+                return res.json({
+                    success: true,
+                    correct: isCorrect,
+                    questionId,
+                    selectedAnswer: normalizedSelected,
+                    selectedOption: formatMathText(
+                        getOptionText(
+                            question,
+                            normalizedSelected
+                        )
+                    ),
+                    correctAnswer,
+                    correctOption: formatMathText(
+                        getOptionText(
+                            question,
+                            correctAnswer
+                        )
+                    ),
+                    solution,
+                    explanation: solution
+                });
+            } // IMPORTANT: closes single-question mode
 
-            // BATCH QUIZ MODE REQUIRES AUTHENTICATION
+            // BATCH QUIZ MODE: requires authentication
             const user = await getAuthenticatedUser(req);
 
             if (!user) {
                 return res.status(401).json({
                     success: false,
-                    message: "Please sign in to submit and save a quiz."
+                    message:
+                        "Please sign in to submit and save a quiz."
                 });
             }
 
@@ -1779,9 +1789,10 @@ return res.json({
                 totalQuestions
             } = body;
 
-            const quizQuestions = Array.isArray(submittedQuestions)
-                ? submittedQuestions
-                : [];
+            const quizQuestions =
+                Array.isArray(submittedQuestions)
+                    ? submittedQuestions
+                    : [];
 
             const submittedAnswers =
                 answers && typeof answers === "object"
@@ -1803,7 +1814,8 @@ return res.json({
                     question
                 );
 
-                const correctAnswer = getCorrectAnswer(question);
+                const correctAnswer =
+                    getCorrectAnswer(question);
 
                 const correct =
                     normalizedSelected === correctAnswer &&
@@ -1818,12 +1830,15 @@ return res.json({
                     selectedAnswer: normalizedSelected,
                     correctAnswer,
                     correct,
-                    solution: getQuestionSolution(question)
+                    solution: formatMathText(
+                        getQuestionSolution(question)
+                    )
                 };
             });
 
             const finalTotal =
-                Number(totalQuestions) || quizQuestions.length;
+                Number(totalQuestions) ||
+                quizQuestions.length;
 
             const finalScore =
                 score !== undefined
@@ -1866,7 +1881,6 @@ return res.json({
                 ]
             );
 
-            
             const savedResult = insert.rows[0];
 
             return res.json({
