@@ -135,6 +135,73 @@ async function initializeDatabase() {
         );
     `);
 
+    // ============================================================
+    // NOTES TABLE
+    // ============================================================
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS study_notes (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id)
+                ON DELETE CASCADE,
+            title VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_study_notes_user
+        ON study_notes(user_id, updated_at DESC);
+    `);
+
+    // ============================================================
+    // FLASHCARDS TABLE
+    // ============================================================
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS study_flashcards (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id)
+                ON DELETE CASCADE,
+            deck_name VARCHAR(150) NOT NULL DEFAULT 'My Flashcards',
+            front TEXT NOT NULL,
+            back TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_study_flashcards_user
+        ON study_flashcards(user_id, deck_name);
+    `);
+
+    // ============================================================
+    // PLANNER TABLE
+    // ============================================================
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS study_planner (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id)
+                ON DELETE CASCADE,
+            title VARCHAR(200) NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            due_date DATE,
+            completed BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_study_planner_user
+        ON study_planner(user_id, due_date);
+    `);
+
+
     // Repair the existing TEXT ID column.
     await pool.query(`
         ALTER TABLE users
@@ -378,6 +445,512 @@ async function requireAuth(req, res, next) {
         });
     }
 }
+
+
+ // ============================================================
+ // NOTES API
+ // ============================================================
+
+ app.get("/api/notes", requireAuth, async (req, res) => {
+     try {
+         const result = await pool.query(
+             `SELECT id, title, content, created_at, updated_at
+              FROM study_notes
+              WHERE user_id = $1
+              ORDER BY updated_at DESC`,
+             [req.user.id]
+         );
+
+         return res.json({ success: true, notes: result.rows });
+     } catch (error) {
+         console.error("Get notes error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to load notes."
+         });
+     }
+ });
+
+ app.post("/api/notes", requireAuth, async (req, res) => {
+     try {
+         const title = String(req.body?.title || "").trim();
+         const content = String(req.body?.content || "");
+
+         if (!title) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Note title is required."
+             });
+         }
+
+         if (title.length > 200 || content.length > 100000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Note is too long."
+             });
+         }
+
+         const result = await pool.query(
+             `INSERT INTO study_notes (user_id, title, content)
+              VALUES ($1, $2, $3)
+              RETURNING id, title, content, created_at, updated_at`,
+             [req.user.id, title, content]
+         );
+
+         return res.status(201).json({
+             success: true,
+             message: "Note saved.",
+             note: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Create note error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to save note."
+         });
+     }
+ });
+
+ app.put("/api/notes/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+         const title = String(req.body?.title || "").trim();
+         const content = String(req.body?.content || "");
+
+         if (!/^\d+$/.test(id) || !title) {
+             return res.status(400).json({
+                 success: false,
+                 message: "A valid note ID and title are required."
+             });
+         }
+
+         if (title.length > 200 || content.length > 100000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Note is too long."
+             });
+         }
+
+         const result = await pool.query(
+             `UPDATE study_notes
+              SET title = $1, content = $2, updated_at = NOW()
+              WHERE id = $3 AND user_id = $4
+              RETURNING id, title, content, created_at, updated_at`,
+             [title, content, id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Note not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Note updated.",
+             note: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Update note error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to update note."
+         });
+     }
+ });
+
+ app.delete("/api/notes/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+
+         if (!/^\d+$/.test(id)) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Invalid note ID."
+             });
+         }
+
+         const result = await pool.query(
+             `DELETE FROM study_notes
+              WHERE id = $1 AND user_id = $2
+              RETURNING id`,
+             [id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Note not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Note deleted."
+         });
+     } catch (error) {
+         console.error("Delete note error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to delete note."
+         });
+     }
+ });
+
+ // ============================================================
+ // FLASHCARDS API
+ // ============================================================
+
+ app.get("/api/flashcards", requireAuth, async (req, res) => {
+     try {
+         const result = await pool.query(
+             `SELECT id, deck_name, front, back, created_at, updated_at
+              FROM study_flashcards
+              WHERE user_id = $1
+              ORDER BY deck_name, updated_at DESC`,
+             [req.user.id]
+         );
+
+         return res.json({
+             success: true,
+             flashcards: result.rows
+         });
+     } catch (error) {
+         console.error("Get flashcards error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to load flashcards."
+         });
+     }
+ });
+
+ app.post("/api/flashcards", requireAuth, async (req, res) => {
+     try {
+         const deck = String(
+             req.body?.deckName || "My Flashcards"
+         ).trim();
+         const front = String(req.body?.front || "").trim();
+         const back = String(req.body?.back || "").trim();
+
+         if (!front || !back || !deck) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Deck, question, and answer are required."
+             });
+         }
+
+         if (deck.length > 150 || front.length > 10000 ||
+             back.length > 10000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Flashcard content is too long."
+             });
+         }
+
+         const result = await pool.query(
+             `INSERT INTO study_flashcards
+                 (user_id, deck_name, front, back)
+              VALUES ($1, $2, $3, $4)
+              RETURNING id, deck_name, front, back, created_at, updated_at`,
+             [req.user.id, deck, front, back]
+         );
+
+         return res.status(201).json({
+             success: true,
+             message: "Flashcard saved.",
+             flashcard: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Create flashcard error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to save flashcard."
+         });
+     }
+ });
+
+ app.put("/api/flashcards/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+         const deck = String(
+             req.body?.deckName || "My Flashcards"
+         ).trim();
+         const front = String(req.body?.front || "").trim();
+         const back = String(req.body?.back || "").trim();
+
+         if (!/^\d+$/.test(id) || !deck || !front || !back) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Valid ID, deck, question, and answer are required."
+             });
+         }
+
+         if (deck.length > 150 || front.length > 10000 ||
+             back.length > 10000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Flashcard content is too long."
+             });
+         }
+
+         const result = await pool.query(
+             `UPDATE study_flashcards
+              SET deck_name = $1, front = $2, back = $3, updated_at = NOW()
+              WHERE id = $4 AND user_id = $5
+              RETURNING id, deck_name, front, back, created_at, updated_at`,
+             [deck, front, back, id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Flashcard not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Flashcard updated.",
+             flashcard: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Update flashcard error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to update flashcard."
+         });
+     }
+ });
+
+ app.delete("/api/flashcards/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+
+         if (!/^\d+$/.test(id)) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Invalid flashcard ID."
+             });
+         }
+
+         const result = await pool.query(
+             `DELETE FROM study_flashcards
+              WHERE id = $1 AND user_id = $2
+              RETURNING id`,
+             [id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Flashcard not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Flashcard deleted."
+         });
+     } catch (error) {
+         console.error("Delete flashcard error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to delete flashcard."
+         });
+     }
+ });
+
+ // ============================================================
+ // PLANNER API
+ // ============================================================
+
+ app.get("/api/planner", requireAuth, async (req, res) => {
+     try {
+         const result = await pool.query(
+             `SELECT id, title, description, due_date, completed,
+                     created_at, updated_at
+              FROM study_planner
+              WHERE user_id = $1
+              ORDER BY due_date ASC NULLS LAST, created_at DESC`,
+             [req.user.id]
+         );
+
+         return res.json({
+             success: true,
+             tasks: result.rows
+         });
+     } catch (error) {
+         console.error("Get planner error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to load planner."
+         });
+     }
+ });
+
+ app.post("/api/planner", requireAuth, async (req, res) => {
+     try {
+         const title = String(req.body?.title || "").trim();
+         const description = String(req.body?.description || "");
+         const dueDate = req.body?.dueDate || null;
+
+         if (!title) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Task title is required."
+             });
+         }
+
+         if (title.length > 200 || description.length > 10000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Planner content is too long."
+             });
+         }
+
+         if (dueDate !== null &&
+             (typeof dueDate !== "string" ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+              !isValidDate(dueDate))) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Due date must use YYYY-MM-DD format."
+             });
+         }
+
+         const result = await pool.query(
+             `INSERT INTO study_planner
+                 (user_id, title, description, due_date)
+              VALUES ($1, $2, $3, $4)
+              RETURNING id, title, description, due_date, completed,
+                        created_at, updated_at`,
+             [req.user.id, title, description, dueDate]
+         );
+
+         return res.status(201).json({
+             success: true,
+             message: "Planner task saved.",
+             task: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Create planner task error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to save planner task."
+         });
+     }
+ });
+
+ app.put("/api/planner/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+         const title = String(req.body?.title || "").trim();
+         const description = String(req.body?.description || "");
+         const dueDate = req.body?.dueDate || null;
+         const completed = req.body?.completed;
+
+         if (!/^\d+$/.test(id) || !title ||
+             typeof completed !== "boolean") {
+             return res.status(400).json({
+                 success: false,
+                 message: "ID, title, and completion status are required."
+             });
+         }
+
+         if (title.length > 200 || description.length > 10000) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Planner content is too long."
+             });
+         }
+
+         if (dueDate !== null &&
+             (typeof dueDate !== "string" ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+              !isValidDate(dueDate))) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Due date must use YYYY-MM-DD format."
+             });
+         }
+
+         const result = await pool.query(
+             `UPDATE study_planner
+              SET title = $1, description = $2, due_date = $3,
+                  completed = $4, updated_at = NOW()
+              WHERE id = $5 AND user_id = $6
+              RETURNING id, title, description, due_date, completed,
+                        created_at, updated_at`,
+             [title, description, dueDate, completed, id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Planner task not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Planner task updated.",
+             task: result.rows[0]
+         });
+     } catch (error) {
+         console.error("Update planner task error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to update planner task."
+         });
+     }
+ });
+
+ app.delete("/api/planner/:id", requireAuth, async (req, res) => {
+     try {
+         const id = req.params.id;
+
+         if (!/^\d+$/.test(id)) {
+             return res.status(400).json({
+                 success: false,
+                 message: "Invalid planner task ID."
+             });
+         }
+
+         const result = await pool.query(
+             `DELETE FROM study_planner
+              WHERE id = $1 AND user_id = $2
+              RETURNING id`,
+             [id, req.user.id]
+         );
+
+         if (!result.rowCount) {
+             return res.status(404).json({
+                 success: false,
+                 message: "Planner task not found."
+             });
+         }
+
+         return res.json({
+             success: true,
+             message: "Planner task deleted."
+         });
+     } catch (error) {
+         console.error("Delete planner task error:", error);
+         return res.status(500).json({
+             success: false,
+             message: "Unable to delete planner task."
+         });
+     }
+ });
+
+ // Strict calendar-date validation.
+ function isValidDate(value) {
+     const date = new Date(`${value}T00:00:00.000Z`);
+     return !Number.isNaN(date.getTime()) &&
+         date.toISOString().slice(0, 10) === value;
+ }
+
 // ============================================================
 // QUESTIONS
 // ============================================================
