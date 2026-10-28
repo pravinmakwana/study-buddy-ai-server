@@ -399,26 +399,30 @@ async function getAuthenticatedUser(req) {
         return null;
     }
 
-    const result = await pool.query(
-        `
-        SELECT
-            id,
-            name,
-            email,
-            created_at
-        FROM users
-        WHERE auth_token = $1
-        LIMIT 1
-        `,
-        [token]
-    );
+    
+const result = await pool.query(
+    `
+    SELECT id, name, email, created_at
+    FROM users
+    WHERE auth_token = $1
+    LIMIT 1
+    `,
+    [token]
+);
 
-    if (result.rows.length === 0) {
-        return null;
-    }
+console.log(
+    `[AUTH] ${req.method} ${req.originalUrl} | ` +
+    `Bearer present: true | ` +
+    `Token length: ${token.length} | ` +
+    `Matched user: ${result.rows.length > 0}`
+);
 
-    return result.rows[0];
+if (result.rows.length === 0) {
+    return null;
 }
+
+return result.rows[0];
+
 
 //
 
