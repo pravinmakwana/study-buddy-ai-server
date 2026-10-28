@@ -379,52 +379,50 @@ async function sendPasswordResetOTP(email, otp) {
     return data;
 }
 
-// ============================================================
-// AUTHENTICATED USER
-// ============================================================
+
+ // ============================================================
+ // AUTHENTICATED USER
+ // ============================================================
 
 async function getAuthenticatedUser(req) {
-
-    const authorization =
-        req.headers.authorization || "";
+    const authorization = req.headers.authorization || "";
 
     if (!authorization.startsWith("Bearer ")) {
         return null;
     }
 
-    const token =
-        authorization.substring(7).trim();
+    const token = authorization.substring(7).trim();
 
     if (!token) {
         return null;
     }
 
-    
-const result = await pool.query(
-    `
-    SELECT id, name, email, created_at
-    FROM users
-    WHERE auth_token = $1
-    LIMIT 1
-    `,
-    [token]
-);
+    const result = await pool.query(
+        `SELECT id, name, email, created_at
+         FROM users
+         WHERE auth_token = $1
+         LIMIT 1`,
+        [token]
+    );
 
-console.log(
-    `[AUTH] ${req.method} ${req.originalUrl} | ` +
-    `Bearer present: true | ` +
-    `Token length: ${token.length} | ` +
-    `Matched user: ${result.rows.length > 0}`
-);
+    // Log authentication status without exposing the token.
+    console.log(
+        `[AUTH] ${req.method} ${req.originalUrl} | ` +
+        `Bearer present: true | ` +
+        `Token length: ${token.length} | ` +
+        `Matched user: ${result.rows.length > 0}`
+    );
 
-if (result.rows.length === 0) {
-    return null;
+    if (result.rows.length === 0) {
+        return null;
+    }
+
+    return result.rows[0];
 }
 
-return result.rows[0];
-
-
-//
+// ============================================================
+// AUTHENTICATION MIDDLEWARE
+// ============================================================
 
 async function requireAuth(req, res, next) {
     try {
@@ -437,8 +435,9 @@ async function requireAuth(req, res, next) {
             });
         }
 
-        // Use the database identity, never a client-supplied userId.
+        // Always use the authenticated database identity.
         req.user = user;
+
         return next();
     } catch (error) {
         console.error("Authentication middleware error:", error);
@@ -449,7 +448,6 @@ async function requireAuth(req, res, next) {
         });
     }
 }
-
 
  // ============================================================
  // NOTES API
